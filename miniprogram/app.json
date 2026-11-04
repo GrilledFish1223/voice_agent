@@ -1,0 +1,16 @@
+{
+  "pages": ["pages/voip/index"],
+  "window": {
+    "navigationBarTitleText": "实时通话",
+    "navigationBarBackgroundColor": "#14110e",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#14110e",
+    "backgroundTextStyle": "light"
+  },
+  "style": "v2",
+  "permission": {
+    "scope.record": {
+      "desc": "需要使用麦克风进行实时通话"
+    }
+  }
+}

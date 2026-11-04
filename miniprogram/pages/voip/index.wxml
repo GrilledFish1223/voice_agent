@@ -1,0 +1,84 @@
+<view class="page">
+  <view class="stage {{inCall ? 'is-live' : ''}} {{speaking ? 'is-' + speaking : ''}}">
+    <view class="orb"></view>
+    <text class="status">{{callState}}</text>
+    <text class="route">{{muted ? '麦克风已静音' : '麦克风开着'}} · {{speakerOn ? '免提' : '听筒'}}</text>
+  </view>
+
+  <view class="captions">
+    <text class="who">你说</text>
+    <text class="live">{{asrLive}}</text>
+    <view class="log">
+      <text class="line" wx:for="{{asrLog}}" wx:for-item="line" wx:key="index">{{line}}</text>
+    </view>
+    <text class="who">助手</text>
+    <text class="live">{{replyLive}}</text>
+    <view class="log">
+      <text class="line" wx:for="{{replyLog}}" wx:for-item="line" wx:key="index">{{line}}</text>
+    </view>
+  </view>
+
+  <view class="error" wx:if="{{errorText}}">{{errorText}}</view>
+
+  <view class="actions">
+    <button class="primary" bindtap="startCall" disabled="{{inCall}}" hover-class="none">开始通话</button>
+    <button class="danger" bindtap="endCall" disabled="{{!inCall}}" hover-class="none">结束通话</button>
+    <button class="{{muted ? 'on' : ''}}" bindtap="toggleMute" hover-class="none">{{muted ? '取消静音' : '静音'}}</button>
+    <button class="{{speakerOn ? 'on' : ''}}" bindtap="toggleSpeaker" hover-class="none">{{speakerOn ? '免提' : '听筒'}}</button>
+    <button bindtap="interruptCall" disabled="{{!inCall}}" hover-class="none">打断</button>
+  </view>
+
+  <view class="card">
+    <view class="card-head">
+      <text class="who">当前曲目</text>
+      <text class="muted">{{trackState}}</text>
+    </view>
+    <text class="track-title">{{trackTitle}}</text>
+    <text class="muted">{{trackArtist}}</text>
+    <view class="field">
+      <text class="label">点歌</text>
+      <input
+        value="{{songQuery}}"
+        placeholder="歌名、歌手，或直接点播放"
+        placeholder-class="placeholder"
+        bindinput="onSongInput"
+        confirm-type="done"
+        bindconfirm="requestSong"
+      />
+    </view>
+    <view class="actions tight">
+      <button class="primary" bindtap="requestSong" hover-class="none">点歌</button>
+      <button bindtap="pauseSong" hover-class="none">暂停</button>
+      <button bindtap="nextSong" hover-class="none">下一首</button>
+    </view>
+    <text class="hint">{{musicNote}}</text>
+  </view>
+
+  <view class="card">
+    <text class="section">通话设置</text>
+    <picker mode="selector" range="{{voiceNames}}" value="{{voiceIndex}}" bindchange="onVoiceChange">
+      <view class="field">
+        <text class="label">音色</text>
+        <text class="value">{{voiceNames[voiceIndex]}}</text>
+      </view>
+    </picker>
+    <picker mode="selector" range="{{musicModeNames}}" value="{{musicModeIndex}}" bindchange="onMusicModeChange">
+      <view class="field">
+        <text class="label">音乐</text>
+        <text class="value">{{musicModeNames[musicModeIndex]}}</text>
+      </view>
+    </picker>
+    <view class="field">
+      <text class="label">服务器地址</text>
+      <input
+        value="{{serverUrl}}"
+        placeholder="ws://127.0.0.1:8765/ws"
+        placeholder-class="placeholder"
+        bindinput="onServerInput"
+        bindblur="loadTracks"
+        confirm-type="done"
+      />
+    </view>
+    <text class="hint">开发者工具可以连本机。真机请换成已配置的 wss 域名。</text>
+  </view>
+</view>
