@@ -2,6 +2,7 @@ import json
 
 import pytest
 from pipecat.frames import frames as pipecat_frames
+from pipecat.frames.frames import OutputTransportMessageUrgentFrame
 
 from voice_agent.processors.ws_serializer import ClientEventFrame, PcmJsonFrameSerializer
 
@@ -30,6 +31,15 @@ async def test_client_event_serializes_to_json_text():
     serializer = PcmJsonFrameSerializer()
     encoded = await serializer.serialize(
         ClientEventFrame(payload={"type": "music_control", "action": "play"})
+    )
+    assert json.loads(encoded)["action"] == "play"
+
+
+@pytest.mark.asyncio
+async def test_output_transport_message_serializes_music_control():
+    serializer = PcmJsonFrameSerializer()
+    encoded = await serializer.serialize(
+        OutputTransportMessageUrgentFrame(message={"type": "music_control", "action": "play"})
     )
     assert json.loads(encoded)["action"] == "play"
 

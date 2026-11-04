@@ -4,7 +4,7 @@ from pipecat.frames import frames as pipecat_frames
 from pipecat.frames.frames import Frame, InterruptionFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
-from voice_agent.processors.ws_serializer import ClientEventFrame
+from voice_agent.processors.ws_serializer import ClientEventFrame, client_message
 
 
 def _frame_type(name: str):
@@ -78,4 +78,4 @@ class CaptionTap(FrameProcessor):
             await self.push_frame(InterruptionFrame(), direction)
         await self.push_frame(frame, direction)
         if payload is not None:
-            await self.push_frame(ClientEventFrame(payload=payload), direction)
+            await self.push_frame(client_message(payload), direction)

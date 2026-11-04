@@ -16,6 +16,8 @@ from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMTextFrame,
     StartFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
@@ -31,7 +33,7 @@ except ImportError:  # Pipecat 1.x 只保留 InterruptionFrame
 
 from voice_agent.processors.sentence_split import SentenceBuffer
 from voice_agent.processors.tencent_auth import build_tts_ws_url
-from voice_agent.processors.ws_serializer import ClientEventFrame
+from voice_agent.processors.ws_serializer import client_message
 
 Connect = Callable[[str], Awaitable[object]]
 SAMPLE_RATE = 16000
@@ -96,6 +98,7 @@ class TencentTTSService(FrameProcessor):
         self._live_voice: tuple[object, str] | None = None
         self._accept_audio = False
         self._turn_token = 0
+        self._speech_started = False
         self._closing = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
@@ -111,8 +114,10 @@ class TencentTTSService(FrameProcessor):
             await self.submit_text(frame.text)
         elif isinstance(frame, LLMFullResponseEndFrame):
             await self._flush_tail()
+            await self._mark_speech_stopped()
         elif isinstance(frame, EndFrame):
             await self._flush_tail()
+            await self._mark_speech_stopped()
             await self._close_socket()
         elif isinstance(frame, CancelFrame):
             await self.interrupt()
@@ -178,6 +183,7 @@ class TencentTTSService(FrameProcessor):
         self._turn_token += 1
         self._sentences.reset()
         self._accept_audio = False
+        await self._mark_speech_stopped()
         ws = self._ws
         if ws is not None and self.session_id:
             payload = {
@@ -289,6 +295,9 @@ class TencentTTSService(FrameProcessor):
         if isinstance(message, (bytes, bytearray)):
             if not self._accept_audio:
                 return
+            await self._mark_speech_started()
+            if not self._accept_audio:
+                return
             await self.push_frame(
                 TTSAudioRawFrame(audio=bytes(message), sample_rate=SAMPLE_RATE, num_channels=1),
                 FrameDirection.DOWNSTREAM,
@@ -308,11 +317,16 @@ class TencentTTSService(FrameProcessor):
             return
         if payload.get("ready") == 1:
             self._ready.set()
-        # final == 1 只表示这一次套接字上的合成结束，对话继续。
+        # final == 1 只表示这一轮合成结束，对话继续，但说话状态要收掉。
+        final = payload.get("final")
+        if final == 1 or final == "1":
+            await self._mark_speech_stopped()
         if payload.get("heartbeat") == 1:
             return
 
     async def _close_socket(self) -> None:
+        self._accept_audio = False
+        await self._mark_speech_stopped()
         ws = self._ws
         reader = self._reader
         self._ws = None
@@ -334,13 +348,25 @@ class TencentTTSService(FrameProcessor):
         finally:
             self._closing = False
 
+    async def _mark_speech_started(self) -> None:
+        if self._speech_started:
+            return
+        self._speech_started = True
+        await self.push_frame(TTSStartedFrame(), FrameDirection.DOWNSTREAM)
+
+    async def _mark_speech_stopped(self) -> None:
+        if not self._speech_started:
+            return
+        self._speech_started = False
+        await self.push_frame(TTSStoppedFrame(), FrameDirection.DOWNSTREAM)
+
     async def _emit_error(self, error: object) -> None:
         message = error if isinstance(error, str) else str(error)
         if not message:
             message = "腾讯云合成连接失败"
         try:
             await self.push_frame(
-                ClientEventFrame(payload={"type": "error", "message": message}),
+                client_message({"type": "error", "message": message}),
                 FrameDirection.DOWNSTREAM,
             )
         except asyncio.CancelledError:

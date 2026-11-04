@@ -87,6 +87,18 @@ def test_server_mix_uses_duck_gain_while_speech_is_active(tmp_path):
     assert pcm == mix_int16(b"\x00\x01" * 320, music, DUCK_GAIN)
 
 
+def test_server_mix_volume_zero_silences_music(tmp_path):
+    library = MusicLibrary(tmp_path)
+    track = library.ensure_seed_tracks()[0]
+    stage = MusicStage(MusicSession(mode="server_mix", library=library))
+    stage.session.current = track
+    stage.session.playing = True
+    stage.session.volume = 0
+    pcm = stage.mix_tts_chunk(b"\x00\x01" * 320)
+    music = next(read_pcm_frames(track, frame_bytes=640))
+    assert pcm == mix_int16(b"\x00\x01" * 320, music, 0)
+
+
 @pytest.mark.asyncio
 async def test_caption_tap_emits_final_text_and_marks_speech(tmp_path):
     session = MusicSession(mode="server_mix", library=MusicLibrary(tmp_path))
@@ -100,16 +112,16 @@ async def test_caption_tap_emits_final_text_and_marks_speech(tmp_path):
     transcript = TranscriptionFrame("你好", "user", "2026-11-04T00:00:00+00:00")
     await tap.process_frame(transcript, FrameDirection.DOWNSTREAM)
     assert sent[0] is transcript
-    assert sent[1].payload == {"type": "asr_final", "text": "你好"}
+    assert sent[1].message == {"type": "asr_final", "text": "你好"}
 
     sent.clear()
     await tap.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.DOWNSTREAM)
     assert session.speech_active is True
-    assert sent[-1].payload == {"type": "user_speaking", "active": True}
+    assert sent[-1].message == {"type": "user_speaking", "active": True}
 
     sent.clear()
     await tap.process_frame(LLMTextFrame("好的"), FrameDirection.DOWNSTREAM)
-    assert sent[-1].payload == {"type": "llm_delta", "text": "好的"}
+    assert sent[-1].message == {"type": "llm_delta", "text": "好的"}
 
 
 def test_build_session_rejects_missing_settings_without_connecting(tmp_path):

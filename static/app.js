@@ -38,6 +38,7 @@ let tracks = [];
 let currentTrack = null;
 let userSpeaking = false;
 let botSpeaking = false;
+let restingVolume = 0.8;
 let duckTimer = null;
 let configTimer = null;
 let starting = false;
@@ -131,6 +132,24 @@ function releaseMusicAudio() {
   musicAudio = null;
 }
 
+function readRestingVolume(message) {
+  if (!message || message.volume === undefined || message.volume === null || message.volume === "") {
+    return;
+  }
+  const next = Number(message.volume);
+  if (!Number.isFinite(next)) {
+    return;
+  }
+  restingVolume = Math.min(1, Math.max(0, next));
+}
+
+function currentMusicVolume() {
+  if (userSpeaking || botSpeaking) {
+    return restingVolume * 0.25;
+  }
+  return restingVolume;
+}
+
 function applyMusicVolume() {
   const audio = musicAudio;
   if (!audio) {
@@ -139,7 +158,7 @@ function applyMusicVolume() {
   if (userSpeaking || botSpeaking) {
     window.clearTimeout(duckTimer);
     duckTimer = null;
-    audio.volume = 0.2;
+    audio.volume = currentMusicVolume();
     return;
   }
   window.clearTimeout(duckTimer);
@@ -147,7 +166,7 @@ function applyMusicVolume() {
     if (userSpeaking || botSpeaking || !musicAudio) {
       return;
     }
-    musicAudio.volume = 0.8;
+    musicAudio.volume = restingVolume;
   }, 800);
 }
 
@@ -162,11 +181,7 @@ function startSeparateTrack(url) {
     musicAudio.pause();
   }
   musicAudio = audio;
-  if (userSpeaking || botSpeaking) {
-    audio.volume = 0.2;
-  } else {
-    audio.volume = 0.8;
-  }
+  audio.volume = currentMusicVolume();
   return audio;
 }
 
@@ -184,6 +199,7 @@ function rememberTrack(track) {
 
 function handleMusicControl(message) {
   rememberTrack(message.track);
+  readRestingVolume(message);
   const action = message.action;
   if (musicModeValue() === "server_mix") {
     if (action === "pause") {
@@ -200,31 +216,24 @@ function handleMusicControl(message) {
   if (action === "play") {
     const url = message.track && message.track.url;
     const audio = startSeparateTrack(url);
-    if (!audio) {
-      return;
+    if (audio) {
+      audio.play().catch(() => {
+        showError("浏览器拦住了音乐播放，请再点一次播放。");
+      });
+      setTrackState("播放中");
     }
-    audio.play().catch(() => {
-      showError("浏览器拦住了音乐播放，请再点一次播放。");
-    });
-    setTrackState("播放中");
-    return;
-  }
-  if (action === "pause") {
+  } else if (action === "pause") {
     if (musicAudio) {
       musicAudio.pause();
     }
     setTrackState("已暂停");
-    return;
-  }
-  if (action === "stop") {
+  } else if (action === "stop") {
     if (musicAudio) {
       musicAudio.pause();
       musicAudio.currentTime = 0;
     }
     setTrackState("已停止");
-    return;
-  }
-  if (action === "next" || action === "resume") {
+  } else if (action === "next" || action === "resume") {
     const url = message.track && message.track.url;
     let audio = musicAudio;
     if (!audio || (url && audio.src !== absoluteUrl(url))) {
@@ -237,6 +246,7 @@ function handleMusicControl(message) {
       setTrackState(action === "next" ? "下一首" : "播放中");
     }
   }
+  applyMusicVolume();
 }
 
 function clearPlayback() {

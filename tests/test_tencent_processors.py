@@ -2,7 +2,7 @@ import asyncio
 import json
 
 import pytest
-from pipecat.frames.frames import LLMTextFrame
+from pipecat.frames.frames import LLMFullResponseEndFrame, LLMTextFrame, TTSStartedFrame, TTSStoppedFrame
 from pipecat.processors.frame_processor import FrameDirection
 
 from voice_agent.processors.tencent_asr import TencentASRService
@@ -155,6 +155,87 @@ async def test_interrupt_drops_stale_audio_until_next_synthesis():
     assert b"STALE" not in audio
     assert b"FRESH" in audio
     new.incoming.put_nowait(None)
+    await asyncio.sleep(0)
+
+
+def _speech_marks(frames) -> list[str]:
+    marks = []
+    for frame in frames:
+        if isinstance(frame, TTSStartedFrame):
+            marks.append("start")
+        elif isinstance(frame, TTSStoppedFrame):
+            marks.append("stop")
+        elif getattr(frame, "audio", None):
+            marks.append("audio")
+    return marks
+
+
+@pytest.mark.asyncio
+async def test_tts_starts_once_per_turn_and_stops_on_interrupt():
+    sockets: list[QueueSocket] = []
+
+    async def connect(_url):
+        sock = QueueSocket([
+            json.dumps({"code": 0, "ready": 1, "heartbeat": 0, "final": 0}),
+        ])
+        sockets.append(sock)
+        return sock
+
+    service = TencentTTSService(
+        app_id="100",
+        secret_id="sid",
+        secret_key="test-secret",
+        voice_type=101001,
+        fast_voice_type="",
+        connect=connect,
+    )
+    seen = []
+
+    async def capture(frame, direction):
+        seen.append(frame)
+
+    service.push_frame = capture
+    await service.connect_session()
+    await service.submit_text("今天天气不错，")
+    sockets[-1].incoming.put_nowait(b"ONE")
+    sockets[-1].incoming.put_nowait(b"TWO")
+    await asyncio.sleep(0)
+    assert _speech_marks(seen) == ["start", "audio", "audio"]
+    await service.interrupt()
+    assert _speech_marks(seen) == ["start", "audio", "audio", "stop"]
+
+
+@pytest.mark.asyncio
+async def test_tts_stops_when_the_turn_ends():
+    sockets: list[QueueSocket] = []
+
+    async def connect(_url):
+        sock = QueueSocket([
+            json.dumps({"code": 0, "ready": 1, "heartbeat": 0, "final": 0}),
+        ])
+        sockets.append(sock)
+        return sock
+
+    service = TencentTTSService(
+        app_id="100",
+        secret_id="sid",
+        secret_key="test-secret",
+        voice_type=101001,
+        fast_voice_type="",
+        connect=connect,
+    )
+    seen = []
+
+    async def capture(frame, direction):
+        seen.append(frame)
+
+    service.push_frame = capture
+    await service.process_frame(LLMTextFrame(text="今天天气不错，"), FrameDirection.DOWNSTREAM)
+    sockets[-1].incoming.put_nowait(b"ONE")
+    await asyncio.sleep(0)
+    await service.process_frame(LLMFullResponseEndFrame(), FrameDirection.DOWNSTREAM)
+    assert _speech_marks(seen) == ["start", "audio", "stop"]
+    sockets[-1].incoming.put_nowait(None)
     await asyncio.sleep(0)
 
 

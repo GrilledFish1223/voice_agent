@@ -3,8 +3,7 @@ const { createPcmPlayer } = require("./pcm-player");
 const DEFAULT_SERVER = "ws://127.0.0.1:8765/ws";
 const RECORD_LIMIT_MS = 600000;
 const RESTART_BEFORE_MS = 20000;
-const DUCK_VOLUME = 0.2;
-const NORMAL_VOLUME = 0.8;
+const DEFAULT_VOLUME = 0.8;
 const DUCK_RELEASE_MS = 800;
 const DEFAULT_PROMPT =
   "你是一个专业热情的智能语音助手，可以陪聊和播放音乐。回答使用口语，每次不超过两句话。用户要求放歌、暂停、切歌或调节音量时，调用音乐工具。";
@@ -67,6 +66,7 @@ Page({
     this.recording = false;
     this.userSpeaking = false;
     this.botSpeaking = false;
+    this.restingVolume = DEFAULT_VOLUME;
     this.replyBuffer = "";
     this.musicAudio = null;
     this.tracks = [];
@@ -511,6 +511,25 @@ Page({
     }
   },
 
+  readRestingVolume(message) {
+    if (!message || message.volume === undefined || message.volume === null || message.volume === "") {
+      return;
+    }
+    const next = Number(message.volume);
+    if (!Number.isFinite(next)) {
+      return;
+    }
+    this.restingVolume = Math.min(1, Math.max(0, next));
+  },
+
+  currentMusicVolume() {
+    const resting = Number.isFinite(this.restingVolume) ? this.restingVolume : DEFAULT_VOLUME;
+    if (this.userSpeaking || this.botSpeaking) {
+      return resting * 0.25;
+    }
+    return resting;
+  },
+
   applyMusicVolume() {
     if (this.data.musicMode === "server_mix") {
       return;
@@ -524,7 +543,7 @@ Page({
         clearTimeout(this.duckTimer);
         this.duckTimer = null;
       }
-      audio.volume = DUCK_VOLUME;
+      audio.volume = this.currentMusicVolume();
       return;
     }
     if (this.duckTimer) {
@@ -537,7 +556,8 @@ Page({
       if (this.data.musicMode === "server_mix") {
         return;
       }
-      this.musicAudio.volume = NORMAL_VOLUME;
+      const resting = Number.isFinite(this.restingVolume) ? this.restingVolume : DEFAULT_VOLUME;
+      this.musicAudio.volume = resting;
     }, DUCK_RELEASE_MS);
   },
 
@@ -555,7 +575,7 @@ Page({
       audio.src = absolute;
     }
     audio.loop = true;
-    audio.volume = this.userSpeaking || this.botSpeaking ? DUCK_VOLUME : NORMAL_VOLUME;
+    audio.volume = this.currentMusicVolume();
     return audio;
   },
 
@@ -576,6 +596,7 @@ Page({
 
   handleMusicControl(message) {
     this.rememberTrack(message.track);
+    this.readRestingVolume(message);
     const action = message.action;
     if (this.data.musicMode === "server_mix") {
       if (action === "pause") {
@@ -592,29 +613,22 @@ Page({
     if (action === "play") {
       const url = message.track && message.track.url;
       const audio = this.startSeparateTrack(url);
-      if (!audio) {
-        return;
+      if (audio) {
+        audio.play();
+        this.setData({ trackState: "播放中" });
       }
-      audio.play();
-      this.setData({ trackState: "播放中" });
-      return;
-    }
-    if (action === "pause") {
+    } else if (action === "pause") {
       if (this.musicAudio) {
         this.musicAudio.pause();
       }
       this.setData({ trackState: "已暂停" });
-      return;
-    }
-    if (action === "stop") {
+    } else if (action === "stop") {
       if (this.musicAudio) {
         this.musicAudio.pause();
         this.musicAudio.seek(0);
       }
       this.setData({ trackState: "已停止" });
-      return;
-    }
-    if (action === "next" || action === "resume") {
+    } else if (action === "next" || action === "resume") {
       const url = message.track && message.track.url;
       let audio = this.musicAudio;
       const absolute = url ? this.absoluteMediaUrl(url) : "";
@@ -626,6 +640,7 @@ Page({
         this.setData({ trackState: action === "next" ? "下一首" : "播放中" });
       }
     }
+    this.applyMusicVolume();
   },
 
   trackList() {

@@ -30,7 +30,7 @@ from voice_agent.processors.caption_tap import CaptionTap
 from voice_agent.processors.music_mixer import DUCK_GAIN, IDLE_GAIN, mix_int16
 from voice_agent.processors.tencent_asr import TencentASRService
 from voice_agent.processors.tencent_tts import TencentTTSService
-from voice_agent.processors.ws_serializer import ClientEventFrame, PcmJsonFrameSerializer
+from voice_agent.processors.ws_serializer import ClientEventFrame, PcmJsonFrameSerializer, client_message
 from voice_agent.services.music_library import MusicLibrary, MusicTrack, read_pcm_frames
 
 try:
@@ -228,7 +228,8 @@ class MusicStage(FrameProcessor):
         ):
             return tts_pcm
         music = self._take_music(len(tts_pcm))
-        gain = DUCK_GAIN if self.session.speech_active else IDLE_GAIN
+        # 0.8 是默认音量，闪避和闲置增益都按它标定；音量为 0 时音乐静音。
+        gain = (DUCK_GAIN if self.session.speech_active else IDLE_GAIN) * (self.session.volume / 0.8)
         return mix_int16(tts_pcm, music, gain)
 
     def _take_music(self, size: int) -> bytes:
@@ -299,7 +300,7 @@ class MusicStage(FrameProcessor):
         try:
             updated = SessionConfig(**data)
         except ValueError as exc:
-            await self.push_frame(ClientEventFrame(payload={"type": "error", "message": str(exc)}))
+            await self.push_frame(client_message({"type": "error", "message": str(exc)}))
             return
         self._config = updated
         self.session.mode = updated.music_mode
@@ -368,7 +369,7 @@ class MusicStage(FrameProcessor):
                 payload = self.session.outbound.get_nowait()
             except asyncio.QueueEmpty:
                 return
-            await self.push_frame(ClientEventFrame(payload=payload))
+            await self.push_frame(client_message(payload))
 
     def _ensure_pump(self) -> None:
         if self._pump_task is not None and not self._pump_task.done():
@@ -415,7 +416,7 @@ def _relay_captions(processor: FrameProcessor, tap: CaptionTap) -> None:
         payload = tap.claim(frame)
         await original(frame, direction)
         if payload is not None:
-            await original(ClientEventFrame(payload=payload), direction)
+            await original(client_message(payload), direction)
 
     processor.push_frame = push_frame  # type: ignore[method-assign]
 

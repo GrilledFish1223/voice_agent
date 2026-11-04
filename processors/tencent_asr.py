@@ -21,7 +21,7 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from voice_agent.processors.tencent_auth import build_asr_ws_url
-from voice_agent.processors.ws_serializer import ClientEventFrame
+from voice_agent.processors.ws_serializer import client_message
 
 Connect = Callable[[str], Awaitable[object]]
 
@@ -234,7 +234,7 @@ class TencentASRService(FrameProcessor):
             message = "腾讯云识别连接失败"
         try:
             await self.push_frame(
-                ClientEventFrame(payload={"type": "error", "message": message}),
+                client_message({"type": "error", "message": message}),
                 FrameDirection.DOWNSTREAM,
             )
         except asyncio.CancelledError:

@@ -9,6 +9,8 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     InterruptionFrame,
     OutputAudioRawFrame,
+    OutputTransportMessageFrame,
+    OutputTransportMessageUrgentFrame,
 )
 from pipecat.serializers.base_serializer import FrameSerializer
 
@@ -28,10 +30,17 @@ class ClientEventFrame(DataFrame):
     payload: dict
 
 
+def client_message(payload: dict) -> OutputTransportMessageUrgentFrame:
+    """下行 JSON 必须是传输消息，输出端才会调用序列化器。"""
+    return OutputTransportMessageUrgentFrame(message=payload)
+
+
 class PcmJsonFrameSerializer(FrameSerializer):
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, (TTSAudioRawFrame, OutputAudioRawFrame, InputAudioRawFrame)):
             return frame.audio
+        if isinstance(frame, (OutputTransportMessageFrame, OutputTransportMessageUrgentFrame)):
+            return json.dumps(frame.message, ensure_ascii=False)
         if isinstance(frame, ClientEventFrame):
             return json.dumps(frame.payload, ensure_ascii=False)
         interruption = tuple(
