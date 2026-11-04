@@ -19,16 +19,33 @@ class SentenceBuffer:
             if cut is None:
                 return ready
             is_first = not self.first_sent
-            ready.append(self._text[: cut + 1].strip())
+            sentence = self._text[: cut + 1].strip()
             self._text = self._text[cut + 1 :]
             self.first_sent = True
+            if sentence:
+                ready.append(sentence)
             if is_first:
                 return ready
 
     def flush(self) -> list[str]:
+        ready: list[str] = []
+        while True:
+            cut = self._find_cut(LATER_MARKS, require_four=False)
+            if cut is None:
+                break
+            sentence = self._text[: cut + 1].strip()
+            self._text = self._text[cut + 1 :]
+            if sentence:
+                ready.append(sentence)
         tail = self._text.strip()
         self._text = ""
-        return [tail] if tail else []
+        if tail:
+            ready.append(tail)
+        return ready
+
+    def reset(self) -> None:
+        self._text = ""
+        self.first_sent = False
 
     def _find_cut(self, marks: set[str], require_four: bool) -> int | None:
         for index, char in enumerate(self._text):
