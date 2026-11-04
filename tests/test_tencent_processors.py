@@ -145,14 +145,16 @@ async def test_interrupt_drops_stale_audio_until_next_synthesis():
     await service.connect_session()
     await service.submit_text("今天天气不错，")
     await service.interrupt()
-    current = sockets[-1]
-    current.incoming.put_nowait(b"STALE")
+    old = sockets[0]
+    old.incoming.put_nowait(b"STALE")
     await service.submit_text("新的一句。")
-    current.incoming.put_nowait(b"FRESH")
+    new = sockets[-1]
+    new.incoming.put_nowait(b"FRESH")
     await asyncio.sleep(0)
+    assert old is not new
     assert b"STALE" not in audio
     assert b"FRESH" in audio
-    current.incoming.put_nowait(None)
+    new.incoming.put_nowait(None)
     await asyncio.sleep(0)
 
 

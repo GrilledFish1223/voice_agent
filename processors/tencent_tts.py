@@ -193,7 +193,6 @@ class TencentTTSService(FrameProcessor):
             except Exception as exc:
                 await self._emit_error(exc)
         await self._close_socket()
-        await self.connect_session()
 
     async def _flush_tail(self) -> None:
         token = self._turn_token
