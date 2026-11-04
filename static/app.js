@@ -345,15 +345,16 @@ async function startCall() {
       }
     };
     socket = new WebSocket(socketUrl());
-    socket.binaryType = "arraybuffer";
-    socket.onopen = () => {
+    const activeSocket = socket;
+    activeSocket.binaryType = "arraybuffer";
+    activeSocket.onopen = () => {
       setStatus("通话中", true);
       startButton.disabled = true;
       endButton.disabled = false;
       interruptButton.disabled = false;
       sendConfig();
     };
-    socket.onmessage = (event) => {
+    activeSocket.onmessage = (event) => {
       if (typeof event.data === "string") {
         handleTextMessage(event.data);
         return;
@@ -362,17 +363,18 @@ async function startCall() {
         playbackNode.port.postMessage(event.data.slice(0));
       }
     };
-    socket.onerror = () => {
+    activeSocket.onerror = () => {
       showError("通话连接失败");
     };
-    socket.onclose = () => {
-      startButton.disabled = false;
-      endButton.disabled = true;
-      interruptButton.disabled = true;
-      if (stage.classList.contains("is-live")) {
-        setStatus("已结束", false);
+    activeSocket.onclose = () => {
+      if (socket !== activeSocket) {
+        return;
       }
-      resetSpeaking();
+      socket = null;
+      const updateStatus = stage.classList.contains("is-live") ? undefined : false;
+      releaseCallMedia().finally(() => {
+        resetCallControls(updateStatus);
+      });
     };
     if (audioContext.state === "suspended") {
       await audioContext.resume();
@@ -387,28 +389,44 @@ async function startCall() {
   }
 }
 
-async function endCall(updateStatus) {
-  if (socket) {
-    socket.onclose = null;
-    socket.close();
-    socket = null;
-  }
+async function releaseCallMedia() {
   if (micStream) {
     micStream.getTracks().forEach((track) => track.stop());
     micStream = null;
   }
   captureNode = null;
   playbackNode = null;
-  if (audioContext) {
-    await audioContext.close();
-    audioContext = null;
+  const context = audioContext;
+  audioContext = null;
+  if (context && context.state !== "closed") {
+    await context.close();
   }
+}
+
+function resetCallControls(updateStatus) {
   startButton.disabled = false;
   endButton.disabled = true;
   interruptButton.disabled = true;
   resetSpeaking();
   if (updateStatus !== false) {
     setStatus("已结束", false);
+  }
+}
+
+async function endCall(updateStatus) {
+  const active = socket;
+  socket = null;
+  if (
+    active &&
+    active.readyState !== WebSocket.CLOSING &&
+    active.readyState !== WebSocket.CLOSED
+  ) {
+    active.close();
+  }
+  try {
+    await releaseCallMedia();
+  } finally {
+    resetCallControls(updateStatus);
   }
 }
 
