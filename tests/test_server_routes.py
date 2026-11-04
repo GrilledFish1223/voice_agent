@@ -106,6 +106,9 @@ def test_index_stays_available_without_call_page(tmp_path):
     page = Path(__file__).resolve().parents[1] / "static" / "index.html"
     if not page.is_file():
         assert "通话页还没有做好" in response.text
+    else:
+        assert "实时通话" in response.text
+        assert "开始通话" in response.text
 
 
 @pytest.mark.asyncio

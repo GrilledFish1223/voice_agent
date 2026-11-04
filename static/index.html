@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>实时通话</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #14110e;
+      --bg-raise: #221c17;
+      --line: #3c3229;
+      --ink: #f6f1e7;
+      --muted: #b7aa9a;
+      --amber: #e7a15a;
+      --amber-deep: #8a4b22;
+      --danger: #d4654f;
+      --ok: #d7c4a3;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse at 50% 0%, rgba(231, 161, 90, 0.16), transparent 42%),
+        var(--bg);
+      font: 16px/1.5 "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+    }
+
+    button, input, select, textarea { font: inherit; color: inherit; }
+
+    button { cursor: pointer; }
+
+    .shell {
+      width: min(1080px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .stage, .panel {
+      background: rgba(34, 28, 23, 0.88);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+    }
+
+    .stage { padding: 28px 24px 22px; }
+
+    .stage-head, .panel-head, .track-top, .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    h1, h2, p { margin: 0; }
+
+    h1 { font-size: 32px; font-weight: 650; letter-spacing: 0.04em; }
+
+    h2 { font-size: 18px; font-weight: 650; }
+
+    .muted, .hint, .who { color: var(--muted); }
+
+    .hint { margin-top: 8px; font-size: 13px; }
+
+    .orb-wrap {
+      display: grid;
+      justify-items: center;
+      gap: 14px;
+      padding: 28px 0 18px;
+    }
+
+    .orb {
+      width: 148px;
+      height: 148px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffe7c2, var(--amber) 46%, var(--amber-deep) 78%);
+      box-shadow: 0 0 0 14px rgba(231, 161, 90, 0.08), 0 24px 40px rgba(0, 0, 0, 0.28);
+    }
+
+    .stage.is-live .orb { animation: breathe 2.6s ease-in-out infinite; }
+
+    @keyframes breathe {
+      50% { transform: scale(1.04); box-shadow: 0 0 0 22px rgba(231, 161, 90, 0.12), 0 24px 40px rgba(0, 0, 0, 0.28); }
+    }
+
+    #status-text { font-size: 18px; }
+
+    .captions {
+      min-height: 180px;
+      margin: 8px 0 18px;
+      padding: 16px 18px;
+      border-radius: 20px;
+      background: #100e0c;
+    }
+
+    .who { margin-top: 12px; font-size: 13px; }
+
+    .who:first-child { margin-top: 0; }
+
+    .live {
+      min-height: 28px;
+      font-size: 20px;
+    }
+
+    .log { display: grid; gap: 4px; }
+
+    .log p { color: var(--ok); font-size: 14px; }
+
+    .actions, .track-actions, .clone-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: #3a312a;
+    }
+
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    button.primary { background: var(--amber); color: #2a1608; font-weight: 700; }
+
+    button.danger { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
+
+    .error {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(212, 101, 79, 0.14);
+      color: #ffc7bb;
+    }
+
+    .track {
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 18px;
+      background: #1a1613;
+    }
+
+    .panel { padding: 22px; display: grid; gap: 16px; }
+
+    label { display: grid; gap: 6px; font-size: 14px; }
+
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #100e0c;
+    }
+
+    textarea { min-height: 96px; resize: vertical; }
+
+    .clone {
+      display: grid;
+      gap: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+
+    @media (max-width: 860px) {
+      .shell { grid-template-columns: 1fr; width: min(640px, calc(100% - 20px)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="stage" id="stage">
+      <div class="stage-head">
+        <div>
+          <h1>实时通话</h1>
+          <p class="muted">对着麦克风说话，助手会接话，也可以放背景音乐。</p>
+        </div>
+      </div>
+      <div class="orb-wrap">
+        <div class="orb" aria-hidden="true"></div>
+        <p id="status-text">未开始</p>
+      </div>
+      <div class="captions" aria-live="polite">
+        <p class="who">你说</p>
+        <p id="asr-live" class="live">等待你开口</p>
+        <div id="asr-log" class="log"></div>
+        <p class="who">助手</p>
+        <p id="reply-live" class="live">等待回复</p>
+        <div id="reply-log" class="log"></div>
+      </div>
+      <div class="actions">
+        <button class="primary" id="start-call" type="button">开始通话</button>
+        <button class="danger" id="end-call" type="button" disabled>结束通话</button>
+        <button id="interrupt" type="button" disabled>打断</button>
+      </div>
+      <p id="error-banner" class="error" hidden></p>
+      <article class="track">
+        <div class="track-top">
+          <div>
+            <p class="who">当前曲目</p>
+            <h2 id="track-title">还没有曲目</h2>
+            <p id="track-artist" class="muted"></p>
+          </div>
+          <p id="track-state" class="muted">未播放</p>
+        </div>
+        <div class="track-actions">
+          <button id="music-play" type="button">播放</button>
+          <button id="music-pause" type="button">暂停</button>
+          <button id="music-next" type="button">下一首</button>
+        </div>
+      </article>
+    </section>
+    <form class="panel" id="settings">
+      <div class="panel-head">
+        <h2>通话设置</h2>
+      </div>
+      <p class="hint">这些改动会沿当前通话送出，不用刷新页面。</p>
+      <label>
+        系统提示词
+        <textarea id="system-prompt">你是一个专业热情的智能语音助手，可以陪聊和播放音乐。回答使用口语，每次不超过两句话。用户要求放歌、暂停、切歌或调节音量时，调用音乐工具。</textarea>
+      </label>
+      <label>
+        预置音色
+        <select id="voice-type">
+          <option value="101001">正在加载音色</option>
+        </select>
+      </label>
+      <label>
+        FastVoiceType
+        <input id="fast-voice-type" type="text" placeholder="留空则使用上面的预置音色" autocomplete="off">
+      </label>
+      <label>
+        语速
+        <input id="speed" type="number" min="-2" max="2" step="0.1" value="0">
+      </label>
+      <label>
+        停顿判定 <span id="vad-stop-value">0.5</span> 秒
+        <input id="vad-stop" type="range" min="0.2" max="2" step="0.1" value="0.5">
+      </label>
+      <label>
+        音乐模式
+        <select id="music-mode">
+          <option value="client_url">客户端独立播放</option>
+          <option value="server_mix">服务端混音</option>
+        </select>
+      </label>
+      <p id="music-mode-note" class="hint">客户端播放时，音乐会单独出声，说话时音量会降下来。</p>
+      <div class="clone">
+        <h2>声音复刻</h2>
+        <label>
+          WAV 文件
+          <input id="clone-audio" type="file" accept="audio/wav,.wav">
+        </label>
+        <label>
+          对应文本
+          <textarea id="clone-text" placeholder="录音里说的原话"></textarea>
+        </label>
+        <label>
+          音色名称
+          <input id="clone-name" type="text" placeholder="例如：我的声音" autocomplete="off">
+        </label>
+        <div class="clone-actions">
+          <button id="clone-submit" type="button">上传并复刻</button>
+        </div>
+        <p id="clone-result" class="hint"></p>
+      </div>
+    </form>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
