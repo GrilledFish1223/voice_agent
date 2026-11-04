@@ -88,6 +88,7 @@ class TencentASRService(FrameProcessor):
         self._read_task = asyncio.create_task(self.connect_and_read(voice_id))
 
     async def connect_and_read(self, voice_id: str) -> None:
+        ws = None
         try:
             now = int(time.time())
             url = build_asr_ws_url(
@@ -100,8 +101,10 @@ class TencentASRService(FrameProcessor):
                 nonce=random.randint(1, 1_000_000_000),
                 engine_model_type=self._engine_model_type,
             )
-            self._ws = await self._connect(url)
+            ws = await self._connect(url)
         except asyncio.CancelledError:
+            if ws is not None:
+                self._ws = ws
             if _is_real_cancel():
                 raise
             return
@@ -109,7 +112,10 @@ class TencentASRService(FrameProcessor):
             self._ws = None
             await self._emit_error(exc)
             return
-        await self._consume(self._ws)
+        self._ws = ws
+        if self._closing:
+            return
+        await self._consume(ws)
 
     async def send_audio(self, pcm: bytes) -> None:
         ws = self._ws
@@ -124,17 +130,18 @@ class TencentASRService(FrameProcessor):
             await self._emit_error(exc)
 
     async def finish(self) -> None:
+        self._closing = True
+        await self._stop_reader()
         ws = self._ws
         if ws is None:
+            self._closing = False
             return
-        self._closing = True
         try:
             try:
                 await ws.send(json.dumps({"type": "end"}))
             except asyncio.CancelledError:
                 if _is_real_cancel():
                     raise
-                return
             except Exception as exc:
                 await self._emit_error(exc)
             try:
@@ -144,11 +151,9 @@ class TencentASRService(FrameProcessor):
                     raise
             except Exception as exc:
                 await self._emit_error(exc)
-            finally:
-                if self._ws is ws:
-                    self._ws = None
-            await self._stop_reader()
         finally:
+            if self._ws is ws:
+                self._ws = None
             self._closing = False
 
     async def _consume(self, ws) -> None:

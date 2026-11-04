@@ -94,8 +94,7 @@ class TencentTTSService(FrameProcessor):
         self._ready = asyncio.Event()
         self.session_id: str | None = None
         self._live_voice: tuple[object, str] | None = None
-        self._synthesis_id = 0
-        self._cancelled_id = -1
+        self._accept_audio = False
         self._turn_token = 0
         self._closing = False
 
@@ -110,7 +109,6 @@ class TencentTTSService(FrameProcessor):
             await self.connect_session()
         elif isinstance(frame, LLMTextFrame):
             await self.submit_text(frame.text)
-            return
         elif isinstance(frame, LLMFullResponseEndFrame):
             await self._flush_tail()
         elif isinstance(frame, EndFrame):
@@ -133,6 +131,7 @@ class TencentTTSService(FrameProcessor):
             await self._close_socket()
         self.session_id = str(uuid.uuid4())
         self._ready.clear()
+        self._accept_audio = False
         now = int(time.time())
         try:
             url = build_tts_ws_url(
@@ -178,22 +177,23 @@ class TencentTTSService(FrameProcessor):
     async def interrupt(self) -> None:
         self._turn_token += 1
         self._sentences.reset()
-        self._cancelled_id = self._synthesis_id
+        self._accept_audio = False
         ws = self._ws
-        if ws is None or not self.session_id:
-            return
-        payload = {
-            "session_id": self.session_id,
-            "message_id": str(uuid.uuid4()),
-            "action": "ACTION_RESET",
-        }
-        try:
-            await ws.send(json.dumps(payload))
-        except asyncio.CancelledError:
-            if _is_real_cancel():
-                raise
-        except Exception as exc:
-            await self._emit_error(exc)
+        if ws is not None and self.session_id:
+            payload = {
+                "session_id": self.session_id,
+                "message_id": str(uuid.uuid4()),
+                "action": "ACTION_RESET",
+            }
+            try:
+                await ws.send(json.dumps(payload))
+            except asyncio.CancelledError:
+                if _is_real_cancel():
+                    raise
+            except Exception as exc:
+                await self._emit_error(exc)
+        await self._close_socket()
+        await self.connect_session()
 
     async def _flush_tail(self) -> None:
         token = self._turn_token
@@ -212,7 +212,7 @@ class TencentTTSService(FrameProcessor):
             return False
         if token != self._turn_token or self._ws is None or not self.session_id:
             return False
-        self._synthesis_id += 1
+        ws = self._ws
         payload = {
             "session_id": self.session_id,
             "message_id": str(uuid.uuid4()),
@@ -220,7 +220,7 @@ class TencentTTSService(FrameProcessor):
             "data": sentence,
         }
         try:
-            await self._ws.send(json.dumps(payload))
+            await ws.send(json.dumps(payload))
         except asyncio.CancelledError:
             if _is_real_cancel():
                 raise
@@ -228,6 +228,11 @@ class TencentTTSService(FrameProcessor):
         except Exception as exc:
             await self._emit_error(exc)
             return False
+        # 发送之后再让读循环把已经进队的旧音频丢掉，然后才开始播放。
+        await asyncio.sleep(0)
+        if token != self._turn_token or self._ws is not ws:
+            return False
+        self._accept_audio = True
         return True
 
     async def _ensure_connected(self) -> bool:
@@ -283,7 +288,7 @@ class TencentTTSService(FrameProcessor):
 
     async def _on_server_message(self, message: object) -> None:
         if isinstance(message, (bytes, bytearray)):
-            if self._synthesis_id == self._cancelled_id:
+            if not self._accept_audio:
                 return
             await self.push_frame(
                 TTSAudioRawFrame(audio=bytes(message), sample_rate=SAMPLE_RATE, num_channels=1),
