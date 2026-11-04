@@ -47,6 +47,7 @@ def test_tts_url_uses_get_prefix_plaintext():
     assert "Signature=wQoNvBOqAnXRt5DECcm1%2BRZpTqQ%3D" in url
     assert "Codec=pcm" in url
     assert "SampleRate=16000" in url
+    assert "FastVoiceType" not in url
 
 
 def test_tts_fast_voice_forces_voice_type_200000000():

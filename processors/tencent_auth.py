@@ -19,7 +19,7 @@ def _canonical_query(params: dict[str, object]) -> str:
 
 def _signed_query(plaintext: str, secret: str, params: dict[str, object], signature_key: str) -> str:
     signature = hmac_sha1_base64(secret, plaintext)
-    signed = dict(params)
+    signed = {key: value for key, value in params.items() if value is not None and value != ""}
     signed[signature_key] = signature
     return urlencode(signed, quote_via=quote, safe="")
 
