@@ -5,28 +5,38 @@ import contextlib
 import time
 
 import websockets
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
     Frame,
+    InputAudioRawFrame,
     InterruptionFrame,
     OutputAudioRawFrame,
     StartFrame,
 )
+from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.audio.vad_processor import VADProcessor
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPIWebsocketTransport
+from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from voice_agent.config import SessionConfig, Settings
-from voice_agent.processors.caption_tap import CaptionTap
+from voice_agent.processors.caption_tap import CaptionTap, latency_payload
 from voice_agent.processors.music_mixer import DUCK_GAIN, IDLE_GAIN, mix_int16
 from voice_agent.processors.tencent_asr import TencentASRService
 from voice_agent.processors.tencent_tts import TencentTTSService
@@ -59,6 +69,29 @@ _CONFIG_FIELDS = (
 )
 _VOLUME_STEP = 0.1
 _FRAME_BYTES = 640
+_LLM_THINKING_OFF = {"extra_body": {"thinking": {"type": "disabled"}}}
+
+
+def build_llm_settings(model: str, system_instruction: str) -> OpenAILLMService.Settings:
+    """官网 1.15：关掉推理思考，先出可说的 token。"""
+    return OpenAILLMService.Settings(
+        model=model,
+        system_instruction=system_instruction,
+        max_tokens=80,
+        extra=_LLM_THINKING_OFF,
+    )
+
+
+def build_user_turn_params() -> LLMUserAggregatorParams:
+    """只用 VAD 开轮。腾讯云中途 final 不能再开新轮，否则会打断正在生成的 LLM。"""
+    return LLMUserAggregatorParams(
+        user_turn_strategies=UserTurnStrategies(
+            start=[VADUserTurnStartStrategy()],
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.0, wait_for_transcript=True)],
+        ),
+        user_turn_stop_timeout=2.0,
+        empty_user_turn=None,
+    )
 
 
 def _require_settings(settings: Settings) -> None:
@@ -99,6 +132,23 @@ class MusicSession:
         self.volume = 0.8
         self.outbound: asyncio.Queue[dict] = asyncio.Queue()
 
+    @property
+    def session_mode(self) -> str:
+        return "music" if self.playing else "conversation"
+
+    def _mode_payload(self) -> dict:
+        return {
+            "type": "session_mode",
+            "mode": self.session_mode,
+            "playing": self.playing,
+        }
+
+    async def _announce(self, action: str, track: MusicTrack | None) -> None:
+        await self.outbound.put(self._mode_payload())
+        if self.mode != "client_url":
+            return
+        await self.outbound.put(self._control_payload(action, track))
+
     async def play(self, params, query: str, genre: str) -> None:
         try:
             track = self.library.search(query or "", genre or "")
@@ -107,16 +157,7 @@ class MusicSession:
             return
         self.current = track
         self.playing = True
-        if self.mode == "client_url":
-            await self.outbound.put(
-                {
-                    "type": "music_control",
-                    "action": "play",
-                    "track": _track_payload(track),
-                    "volume": self.volume,
-                    "ducking": True,
-                }
-            )
+        await self._announce("play", track)
         await params.result_callback({"ok": True, "title": track.title, "mode": self.mode})
 
     async def control(self, params, action: str, volume: float) -> None:
@@ -126,7 +167,16 @@ class MusicSession:
         except (TypeError, ValueError):
             requested = self.volume
         announced = self.current
-        if action == "pause":
+        if action == "play":
+            if self.current is None:
+                track = self._cycle_next()
+                if track is None:
+                    await params.result_callback({"ok": False, "error": "曲库里没有曲目"})
+                    return
+                self.current = track
+                announced = track
+            self.playing = True
+        elif action == "pause":
             self.playing = False
         elif action == "resume":
             self.playing = True
@@ -154,8 +204,7 @@ class MusicSession:
         else:
             await params.result_callback({"ok": False, "error": f"不支持的音乐动作：{action}"})
             return
-        if self.mode == "client_url":
-            await self.outbound.put(self._control_payload(action, announced))
+        await self._announce(action, announced)
         title = self.current.title if self.current is not None else ""
         await params.result_callback(
             {
@@ -186,11 +235,38 @@ class MusicSession:
             "type": "music_control",
             "action": action,
             "volume": self.volume,
-            "ducking": True,
+            "ducking": False,
+            "session_mode": self.session_mode,
+            "playing": self.playing,
         }
         if track is not None:
             payload["track"] = _track_payload(track)
         return payload
+
+
+class ConversationMicGate(FrameProcessor):
+    """音乐模式丢弃上行 PCM，只放行按钮和配置 JSON。"""
+
+    def __init__(self, session: MusicSession, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.session = session
+        self._mode = "conversation"
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+        if self._task_manager is not None:
+            await super().process_frame(frame, direction)
+        if direction != FrameDirection.DOWNSTREAM:
+            await self.push_frame(frame, direction)
+            return
+        mode = self.session.session_mode
+        if mode != self._mode:
+            self._mode = mode
+            if mode == "music":
+                await self.push_frame(InterruptionFrame(), direction)
+            await self.push_frame(client_message(self.session._mode_payload()))
+        if mode == "music" and isinstance(frame, InputAudioRawFrame):
+            return
+        await self.push_frame(frame, direction)
 
 
 class MusicStage(FrameProcessor):
@@ -355,15 +431,13 @@ class MusicStage(FrameProcessor):
         if not isinstance(LLMUpdateSettingsFrame, type):
             return
         model = config.llm_model or self._fallback_model
-        delta = OpenAILLMService.Settings(model=model, system_instruction=config.system_prompt)
+        delta = build_llm_settings(model, config.system_prompt)
         await self.push_frame(
             LLMUpdateSettingsFrame(delta=delta),
             FrameDirection.UPSTREAM,
         )
 
     async def _flush_outbound(self) -> None:
-        if self.session.mode != "client_url":
-            return
         while True:
             try:
                 payload = self.session.outbound.get_nowait()
@@ -421,6 +495,43 @@ def _relay_captions(processor: FrameProcessor, tap: CaptionTap) -> None:
     processor.push_frame = push_frame  # type: ignore[method-assign]
 
 
+def _bind_turn_captions(user_aggregator, assistant_aggregator, tap: CaptionTap) -> None:
+    """用户字幕走 TranscriptionFrame.final；助手整句在轮次结束时提交，对应官网 onBotTranscript。"""
+
+    @assistant_aggregator.event_handler("on_assistant_turn_stopped")
+    async def on_assistant_turn_stopped(aggregator, message):
+        text = (getattr(message, "content", None) or "").strip()
+        if text:
+            await tap.publish({"type": "bot_output", "text": text, "final": True})
+
+
+def _bind_latency_observer(tap: CaptionTap) -> UserBotLatencyObserver:
+    """Pipecat UserBotLatencyObserver：用户停说到机器人开说的真实端到端延迟。"""
+    observer = UserBotLatencyObserver()
+
+    @observer.event_handler("on_latency_measured")
+    async def on_latency_measured(_observer, seconds: float):
+        logger.info("user-to-bot latency: {:.3f}s", seconds)
+        await tap.publish(latency_payload(seconds))
+
+    @observer.event_handler("on_latency_breakdown")
+    async def on_latency_breakdown(_observer, breakdown):
+        parts = [
+            {
+                "key": item.key,
+                "label": item.label,
+                "duration_secs": round(float(item.duration_secs), 3),
+            }
+            for item in getattr(breakdown, "contributions", [])
+            if float(getattr(item, "duration_secs", 0) or 0) >= 0.005
+        ]
+        for line in breakdown.turn_contribution_lines():
+            logger.info(line)
+        await tap.publish(latency_payload(breakdown.total_secs, parts))
+
+    return observer
+
+
 def build_session(websocket, settings: Settings, library: MusicLibrary) -> PipelineTask:
     """组装一条还没启动的会话管道。缺密钥时不连接腾讯云，也不创建模型客户端。"""
     _require_settings(settings)
@@ -441,9 +552,9 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
             audio_out_enabled=True,
             audio_in_sample_rate=16000,
             audio_out_sample_rate=16000,
+            audio_out_10ms_chunks=2,
             add_wav_header=False,
             serializer=PcmJsonFrameSerializer(),
-            fixed_audio_packet_size=640,
         ),
     )
     session = MusicSession(mode=config.music_mode, library=library)
@@ -451,7 +562,7 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
         app_id=settings.tencent_app_id,
         secret_id=settings.tencent_secret_id,
         secret_key=settings.tencent_secret_key,
-        connect=websockets.connect,
+        vad_silence_time=240,
     )
     tts = TencentTTSService(
         app_id=settings.tencent_app_id,
@@ -461,16 +572,12 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
         fast_voice_type=config.fast_voice_type,
         speed=config.speed,
         volume=config.volume,
-        connect=websockets.connect,
     )
     model_name = config.llm_model or settings.llm_model
     llm = OpenAILLMService(
         api_key=settings.llm_api_key,
         base_url=settings.llm_base_url,
-        settings=OpenAILLMService.Settings(
-            model=model_name,
-            system_instruction=config.system_prompt,
-        ),
+        settings=build_llm_settings(model_name, config.system_prompt),
     )
 
     async def play_music(params: FunctionCallParams, query: str, genre: str):
@@ -492,7 +599,11 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
         await session.control(params, action, volume)
 
     context = LLMContext(tools=[play_music, control_music])
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
+    user_params = build_user_turn_params()
+    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+        context,
+        user_params=user_params,
+    )
     caption_tap = CaptionTap(session)
     music_stage = MusicStage(
         session,
@@ -503,9 +614,11 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
     _relay_captions(asr, caption_tap)
     _relay_captions(llm, caption_tap)
     _relay_captions(tts, caption_tap)
+    _bind_turn_captions(user_aggregator, assistant_aggregator, caption_tap)
     pipeline = Pipeline(
         [
             transport.input(),
+            ConversationMicGate(session),
             vad,
             caption_tap,
             asr,
@@ -518,4 +631,15 @@ def build_session(websocket, settings: Settings, library: MusicLibrary) -> Pipel
         ]
     )
     # 1.15 默认会在管道前塞 RTVI，和这条自定义 JSON 协议冲突。
-    return PipelineTask(pipeline, enable_rtvi=False)
+    return PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            audio_in_sample_rate=16000,
+            audio_out_sample_rate=16000,
+            enable_metrics=True,
+            enable_usage_metrics=True,
+            send_initial_empty_metrics=False,
+        ),
+        observers=[MetricsLogObserver(), _bind_latency_observer(caption_tap)],
+        enable_rtvi=False,
+    )

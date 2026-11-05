@@ -16,6 +16,9 @@ _REQUIRED_ENV = (
     "TENCENT_APP_ID",
     "TENCENT_SECRET_ID",
     "TENCENT_SECRET_KEY",
+    "TENCENT_CLOUD_APP_ID",
+    "TENCENT_CLOUD_SECRET_ID",
+    "TENCENT_CLOUD_SECRET_KEY",
     "LLM_BASE_URL",
     "LLM_API_KEY",
     "LLM_MODEL",
@@ -61,7 +64,17 @@ def test_health_reports_missing_keys_when_env_is_empty(monkeypatch, tmp_path):
     with TestClient(app) as client:
         response = client.get("/api/health")
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "missing": list(_REQUIRED_ENV)}
+    assert response.json() == {
+        "ok": True,
+        "missing": [
+            "TENCENT_APP_ID",
+            "TENCENT_SECRET_ID",
+            "TENCENT_SECRET_KEY",
+            "LLM_BASE_URL",
+            "LLM_API_KEY",
+            "LLM_MODEL",
+        ],
+    }
 
 
 def test_music_lists_morning_breeze_after_seed(tmp_path):
@@ -90,12 +103,10 @@ def test_voices_include_presets(tmp_path):
         response = client.get("/api/voices")
     assert response.status_code == 200
     by_type = {item["voice_type"]: item for item in response.json()}
-    assert by_type[101001] == {"voice_type": 101001, "name": "智瑜", "scene": "女声情感"}
-    assert by_type[101004] == {"voice_type": 101004, "name": "智云", "scene": "男声通用"}
-    assert by_type[101015] == {"voice_type": 101015, "name": "智萌", "scene": "女声可爱"}
-    assert by_type[301031] == {"voice_type": 301031, "name": "爱小树", "scene": "超自然女声"}
-    assert by_type[301032] == {"voice_type": 301032, "name": "爱小荷", "scene": "超自然男声"}
-    assert by_type[501004] == {"voice_type": 501004, "name": "智小柔", "scene": "客服"}
+    assert by_type[602003]["scene"] == "超自然大模型音色"
+    assert by_type[502003] == {"voice_type": 502003, "name": "智小敏", "scene": "聊天女声"}
+    assert by_type[602004]["name"] == "暖心阿灿"
+    assert by_type[603003]["name"] == "随和老李"
 
 
 def test_index_stays_available_without_call_page(tmp_path):

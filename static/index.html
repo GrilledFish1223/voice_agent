@@ -3,275 +3,899 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>实时通话</title>
+  <title>实时语音对话 · Pipecat × 腾讯云超自然语音</title>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #14110e;
-      --bg-raise: #221c17;
-      --line: #3c3229;
-      --ink: #f6f1e7;
-      --muted: #b7aa9a;
-      --amber: #e7a15a;
-      --amber-deep: #8a4b22;
-      --danger: #d4654f;
-      --ok: #d7c4a3;
+      --bg-deep: #070a14;
+      --bg-panel: rgba(16, 22, 38, 0.76);
+      --bg-card: rgba(24, 33, 56, 0.65);
+      --bg-card-hover: rgba(34, 46, 76, 0.82);
+      --border-subtle: rgba(148, 163, 184, 0.14);
+      --border-glow: rgba(56, 189, 248, 0.42);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent-cyan: #38bdf8;
+      --accent-indigo: #818cf8;
+      --accent-emerald: #10b981;
+      --accent-rose: #f43f5e;
+      --accent-amber: #f59e0b;
+      --shadow-xl: 0 24px 60px rgba(0, 0, 0, 0.55);
     }
 
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
     body {
-      margin: 0;
       min-height: 100vh;
-      color: var(--ink);
-      background:
-        radial-gradient(ellipse at 50% 0%, rgba(231, 161, 90, 0.16), transparent 42%),
-        var(--bg);
-      font: 16px/1.5 "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background-color: var(--bg-deep);
+      background-image:
+        radial-gradient(circle at 15% 18%, rgba(56, 189, 248, 0.14) 0%, transparent 42%),
+        radial-gradient(circle at 82% 15%, rgba(129, 140, 248, 0.14) 0%, transparent 40%),
+        radial-gradient(circle at 50% 88%, rgba(16, 185, 129, 0.1) 0%, transparent 45%);
+      color: var(--text-main);
+      line-height: 1.5;
+      overflow-x: hidden;
     }
 
-    button, input, select, textarea { font: inherit; color: inherit; }
-
-    button { cursor: pointer; }
-
-    .shell {
-      width: min(1080px, calc(100% - 32px));
+    .app-shell {
+      max-width: 1440px;
       margin: 0 auto;
-      padding: 28px 0 48px;
+      padding: 20px 24px;
+      min-height: 100vh;
       display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+      grid-template-columns: minmax(0, 1.25fr) minmax(380px, 0.85fr);
       gap: 22px;
-      align-items: start;
+      align-items: stretch;
     }
 
-    .stage, .panel {
-      background: rgba(34, 28, 23, 0.88);
-      border: 1px solid var(--line);
-      border-radius: 28px;
+    /* 通用毛玻璃面板 */
+    .glass-panel {
+      background: var(--bg-panel);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 24px;
+      box-shadow: var(--shadow-xl);
     }
 
-    .stage { padding: 28px 24px 22px; }
+    /* 左侧主舞台 */
+    .stage-column {
+      display: flex;
+      flex-direction: column;
+      padding: 24px 28px;
+      position: relative;
+      overflow: hidden;
+      min-height: calc(100vh - 40px);
+    }
 
-    .stage-head, .panel-head, .track-top, .row {
+    .stage-topbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-    }
-
-    h1, h2, p { margin: 0; }
-
-    h1 { font-size: 32px; font-weight: 650; letter-spacing: 0.04em; }
-
-    h2 { font-size: 18px; font-weight: 650; }
-
-    .muted, .hint, .who { color: var(--muted); }
-
-    .hint { margin-top: 8px; font-size: 13px; }
-
-    .orb-wrap {
-      display: grid;
-      justify-items: center;
-      gap: 14px;
-      padding: 28px 0 18px;
-    }
-
-    .orb {
-      width: 148px;
-      height: 148px;
-      border-radius: 50%;
-      background: radial-gradient(circle at 35% 30%, #ffe7c2, var(--amber) 46%, var(--amber-deep) 78%);
-      box-shadow: 0 0 0 14px rgba(231, 161, 90, 0.08), 0 24px 40px rgba(0, 0, 0, 0.28);
-    }
-
-    .stage.is-live .orb { animation: breathe 2.6s ease-in-out infinite; }
-
-    @keyframes breathe {
-      50% { transform: scale(1.04); box-shadow: 0 0 0 22px rgba(231, 161, 90, 0.12), 0 24px 40px rgba(0, 0, 0, 0.28); }
-    }
-
-    #status-text { font-size: 18px; }
-
-    .captions {
-      min-height: 180px;
-      margin: 8px 0 18px;
-      padding: 16px 18px;
-      border-radius: 20px;
-      background: #100e0c;
-    }
-
-    .who { margin-top: 12px; font-size: 13px; }
-
-    .who:first-child { margin-top: 0; }
-
-    .live {
-      min-height: 28px;
-      font-size: 20px;
-    }
-
-    .log { display: grid; gap: 4px; }
-
-    .log p { color: var(--ok); font-size: 14px; }
-
-    .actions, .track-actions, .clone-actions {
-      display: flex;
       flex-wrap: wrap;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 18px;
+      color: #06101e;
+      box-shadow: 0 0 24px rgba(56, 189, 248, 0.4);
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .telemetry-pills {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+    }
+
+    .pill-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: all 0.25s ease;
+    }
+
+    .pill[data-live="true"] {
+      color: #ecfdf5;
+      border-color: rgba(16, 185, 129, 0.45);
+      background: rgba(16, 185, 129, 0.14);
+    }
+
+    .pill[data-live="true"] .pill-dot {
+      background: var(--accent-emerald);
+      box-shadow: 0 0 10px var(--accent-emerald);
+    }
+
+    .error-banner {
+      margin-top: 14px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      background: rgba(244, 63, 94, 0.16);
+      border: 1px solid rgba(244, 63, 94, 0.45);
+      color: #fecdd3;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 10px;
+    }
+
+    .error-banner[hidden] {
+      display: none !important;
+    }
+
+    /* 声波能量球舞台 */
+    .orb-arena {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 0 16px;
+      min-height: 270px;
+    }
+
+    #orb-canvas {
+      width: 220px;
+      height: 220px;
+      display: block;
+    }
+
+    .orb-status-bar {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      text-align: center;
+    }
+
+    .turn-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 16px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      background: rgba(30, 41, 59, 0.78);
+      border: 1px solid var(--border-subtle);
+      color: var(--accent-cyan);
+      transition: all 0.25s ease;
+    }
+
+    .turn-badge[data-mode="user"] {
+      color: #6ee7b7;
+      border-color: rgba(16, 185, 129, 0.5);
+      background: rgba(16, 185, 129, 0.15);
+    }
+
+    .turn-badge[data-mode="bot"] {
+      color: #7dd3fc;
+      border-color: rgba(56, 189, 248, 0.5);
+      background: rgba(56, 189, 248, 0.15);
+    }
+
+    .latency-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--accent-amber);
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.32);
+    }
+
+    .latency-parts {
+      max-width: 420px;
+      font-size: 11px;
+      line-height: 1.4;
+      color: var(--text-dim);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 实时字幕卡片区 */
+    .live-captions-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    .live-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 16px;
+      padding: 14px 16px;
+      min-height: 92px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .live-card[data-active="true"] {
+      border-color: var(--border-glow);
+      box-shadow: 0 0 24px rgba(56, 189, 248, 0.12);
+    }
+
+    .live-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .live-card-text {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--text-main);
+      word-break: break-word;
+    }
+
+    .live-card-sub {
+      font-size: 13px;
+      color: var(--accent-cyan);
+      margin-top: 4px;
+      min-height: 18px;
+    }
+
+    /* 对话历史流 */
+    .chat-stream-box {
+      flex: 1;
+      background: rgba(10, 15, 28, 0.55);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      padding: 14px 16px;
+      overflow-y: auto;
+      max-height: 250px;
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .chat-empty {
+      margin: auto;
+      color: var(--text-dim);
+      font-size: 13px;
+      text-align: center;
+    }
+
+    .chat-bubble {
+      max-width: 86%;
+      padding: 10px 14px;
+      border-radius: 15px;
+      font-size: 14px;
+      line-height: 1.5;
+      animation: fadeUp 0.2s ease-out;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.28), rgba(6, 182, 212, 0.22));
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #ecfdf5;
+      border-bottom-right-radius: 4px;
+    }
+
+    .chat-bubble.bot {
+      align-self: flex-start;
+      background: rgba(30, 41, 59, 0.85);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      border-bottom-left-radius: 4px;
+    }
+
+    .chat-bubble-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 3px;
+    }
+
+    /* 底部悬浮控制坞 */
+    .call-dock {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .dock-main-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
     }
 
     button {
-      border: 0;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 14px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-card);
+      color: var(--text-main);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.18s ease;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--bg-card-hover);
+      border-color: rgba(148, 163, 184, 0.35);
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-start {
+      background: linear-gradient(135deg, #10b981, #059669);
+      border-color: rgba(52, 211, 153, 0.5);
+      color: #031c14;
+      padding: 11px 24px;
+      box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background: linear-gradient(135deg, #34d399, #10b981);
+      box-shadow: 0 10px 28px rgba(16, 185, 129, 0.5);
+    }
+
+    .btn-end {
+      background: rgba(244, 63, 94, 0.18);
+      border-color: rgba(244, 63, 94, 0.45);
+      color: #fda4af;
+    }
+
+    .btn-end:hover:not(:disabled) {
+      background: rgba(244, 63, 94, 0.3);
+    }
+
+    .btn-interrupt {
+      background: rgba(245, 158, 11, 0.16);
+      border-color: rgba(245, 158, 11, 0.45);
+      color: #fde68a;
+    }
+
+    .quick-music-chips {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .chip-btn {
+      font-size: 12px;
+      padding: 7px 12px;
       border-radius: 999px;
-      padding: 12px 18px;
-      background: #3a312a;
+      background: rgba(30, 41, 59, 0.72);
+      color: var(--text-muted);
     }
 
-    button:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    button.primary { background: var(--amber); color: #2a1608; font-weight: 700; }
-
-    button.danger { background: transparent; color: var(--danger); box-shadow: inset 0 0 0 1px var(--danger); }
-
-    .error {
-      margin-top: 14px;
-      padding: 10px 12px;
-      border-radius: 12px;
-      background: rgba(212, 101, 79, 0.14);
-      color: #ffc7bb;
+    .chip-btn:hover:not(:disabled) {
+      color: var(--text-main);
+      border-color: var(--accent-cyan);
     }
 
-    .track {
-      margin-top: 18px;
-      padding: 14px;
-      border-radius: 18px;
-      background: #1a1613;
+    /* 右侧工作台栏 */
+    .studio-column {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
     }
 
-    .panel { padding: 22px; display: grid; gap: 16px; }
-
-    label { display: grid; gap: 6px; font-size: 14px; }
-
-    input, select, textarea {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 10px 12px;
-      background: #100e0c;
+    .studio-card {
+      padding: 18px 20px;
     }
 
-    textarea { min-height: 96px; resize: vertical; }
-
-    .clone {
-      display: grid;
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
       gap: 10px;
-      padding-top: 8px;
-      border-top: 1px solid var(--line);
+      margin-bottom: 12px;
     }
 
-    @media (max-width: 860px) {
-      .shell { grid-template-columns: 1fr; width: min(640px, calc(100% - 20px)); }
+    .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-badge {
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.14);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      color: var(--accent-cyan);
+    }
+
+    .card-badge[data-ducking="true"] {
+      background: rgba(245, 158, 11, 0.18);
+      border-color: rgba(245, 158, 11, 0.45);
+      color: #fcd34d;
+    }
+
+    /* 黑胶唱机卡片 */
+    .vinyl-deck {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      background: rgba(10, 15, 28, 0.6);
+      border: 1px solid var(--border-subtle);
+      margin-bottom: 12px;
+    }
+
+    .vinyl-disc {
+      width: 54px;
+      height: 54px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background:
+        radial-gradient(circle at center, #38bdf8 0 14%, #0f172a 15% 28%, transparent 29%),
+        repeating-radial-gradient(circle at center, #1e293b 0 2px, #090d16 3px 5px);
+      border: 2px solid rgba(148, 163, 184, 0.25);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+      animation: spinDisc 6s linear infinite;
+      animation-play-state: paused;
+    }
+
+    .vinyl-disc[data-playing="true"] {
+      animation-play-state: running;
+    }
+
+    @keyframes spinDisc {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .track-meta {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .track-title {
+      font-size: 15px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .track-artist {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    .music-controls-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .music-controls-row button {
+      flex: 1;
+      justify-content: center;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    .hint-note {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+
+    /* 音色画廊网格 */
+    .voice-chips-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+      max-height: 196px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .voice-card-btn {
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.68);
+      border: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .voice-card-btn[data-selected="true"] {
+      background: rgba(56, 189, 248, 0.18);
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.2);
+    }
+
+    .voice-card-name {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .voice-card-scene {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .voice-card-id {
+      font-size: 10px;
+      color: var(--accent-cyan);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    /* 表单控件 */
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    .field-label {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      font: inherit;
+      font-size: 13px;
+      color: var(--text-main);
+      background: rgba(10, 15, 28, 0.72);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 8px 11px;
+      outline: none;
+      transition: border-color 0.18s ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent-cyan);
+    }
+
+    textarea {
+      min-height: 74px;
+      resize: vertical;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent-cyan);
+    }
+
+    .preset-prompts {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+
+    .preset-prompts button {
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+
+    details.clone-drawer summary {
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    details.clone-drawer[open] summary {
+      margin-bottom: 12px;
+      color: var(--text-main);
+    }
+
+    @media (max-width: 1024px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+      .stage-column {
+        min-height: auto;
+      }
+      .live-captions-grid {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
-  <main class="shell">
-    <section class="stage" id="stage">
-      <div class="stage-head">
-        <div>
-          <h1>实时通话</h1>
-          <p class="muted">对着麦克风说话，助手会接话，也可以放背景音乐。</p>
-        </div>
-      </div>
-      <div class="orb-wrap">
-        <div class="orb" aria-hidden="true"></div>
-        <p id="status-text">未开始</p>
-      </div>
-      <div class="captions" aria-live="polite">
-        <p class="who">你说</p>
-        <p id="asr-live" class="live">等待你开口</p>
-        <div id="asr-log" class="log"></div>
-        <p class="who">助手</p>
-        <p id="reply-live" class="live">等待回复</p>
-        <div id="reply-log" class="log"></div>
-      </div>
-      <div class="actions">
-        <button class="primary" id="start-call" type="button">开始通话</button>
-        <button class="danger" id="end-call" type="button" disabled>结束通话</button>
-        <button id="interrupt" type="button" disabled>打断</button>
-      </div>
-      <p id="error-banner" class="error" hidden></p>
-      <article class="track">
-        <div class="track-top">
+  <div class="app-shell">
+    <!-- 左侧：实时语音对话主舞台 -->
+    <main class="glass-panel stage-column">
+      <header class="stage-topbar">
+        <div class="brand-group">
+          <div class="brand-logo">AI</div>
           <div>
-            <p class="who">当前曲目</p>
-            <h2 id="track-title">还没有曲目</h2>
-            <p id="track-artist" class="muted"></p>
+            <h1 class="brand-title">实时通话 · 智能语音 Agent</h1>
+            <p class="brand-subtitle">Pipecat 级联流水线 · 腾讯云 ASR / 超自然大模型 TTS · DeepSeek</p>
           </div>
-          <p id="track-state" class="muted">未播放</p>
         </div>
-        <div class="track-actions">
-          <button id="music-play" type="button">播放</button>
-          <button id="music-pause" type="button">暂停</button>
-          <button id="music-next" type="button">下一首</button>
+        <div class="telemetry-pills">
+          <span class="pill" id="conn-pill" data-live="false">
+            <span class="pill-dot"></span>
+            <span id="call-state">未连接</span>
+          </span>
+          <span class="pill" id="active-voice-pill">🎙️ 音色 602003</span>
+          <span class="pill">⚡ 200ms/片 · 5片/秒</span>
         </div>
-      </article>
-    </section>
-    <form class="panel" id="settings">
-      <div class="panel-head">
-        <h2>通话设置</h2>
-      </div>
-      <p class="hint">这些改动会沿当前通话送出，不用刷新页面。</p>
-      <label>
-        系统提示词
-        <textarea id="system-prompt">你是一个专业热情的智能语音助手，可以陪聊和播放音乐。回答使用口语，每次不超过两句话。用户要求放歌、暂停、切歌或调节音量时，调用音乐工具。</textarea>
-      </label>
-      <label>
-        预置音色
-        <select id="voice-type">
-          <option value="101001">正在加载音色</option>
-        </select>
-      </label>
-      <label>
-        FastVoiceType
-        <input id="fast-voice-type" type="text" placeholder="留空则使用上面的预置音色" autocomplete="off">
-      </label>
-      <label>
-        语速
-        <input id="speed" type="number" min="-2" max="2" step="0.1" value="0">
-      </label>
-      <label>
-        停顿判定 <span id="vad-stop-value">0.5</span> 秒
-        <input id="vad-stop" type="range" min="0.2" max="2" step="0.1" value="0.5">
-      </label>
-      <label>
-        音乐模式
-        <select id="music-mode">
-          <option value="client_url">客户端独立播放</option>
-          <option value="server_mix">服务端混音</option>
-        </select>
-      </label>
-      <p id="music-mode-note" class="hint">客户端播放时，音乐会单独出声，说话时音量会降下来。</p>
-      <div class="clone">
-        <h2>声音复刻</h2>
-        <label>
-          WAV 文件
-          <input id="clone-audio" type="file" accept="audio/wav,.wav">
-        </label>
-        <label>
-          对应文本
-          <textarea id="clone-text" placeholder="录音里说的原话"></textarea>
-        </label>
-        <label>
-          音色名称
-          <input id="clone-name" type="text" placeholder="例如：我的声音" autocomplete="off">
-        </label>
-        <div class="clone-actions">
-          <button id="clone-submit" type="button">上传并复刻</button>
+      </header>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+
+      <!-- 3D 流体声波能量球 -->
+      <section class="orb-arena">
+        <canvas id="orb-canvas" width="440" height="440"></canvas>
+        <div class="orb-status-bar">
+          <span class="turn-badge" id="turn-state" data-mode="idle">待机中 · 点击下方「开始通话」直接开口</span>
+          <span class="latency-badge" id="latency-badge" hidden>端到端 --</span>
+          <div class="latency-parts" id="latency-parts" hidden></div>
         </div>
-        <p id="clone-result" class="hint"></p>
-      </div>
-    </form>
-  </main>
-  <script src="/static/app.js"></script>
+      </section>
+
+      <!-- 实时双栏字幕卡片 -->
+      <section class="live-captions-grid">
+        <div class="live-card" id="user-live-card">
+          <div class="live-card-head">
+            <span>🎤 你的实时语音 (腾讯云 ASR)</span>
+            <span id="user-rms-tag">0 dB</span>
+          </div>
+          <div id="asr-final" class="live-card-text">等待开始通话…</div>
+          <div id="asr-interim" class="live-card-sub"></div>
+        </div>
+
+        <div class="live-card" id="bot-live-card">
+          <div class="live-card-head">
+            <span>🤖 助手实时回复 (流式 LLM + TTS)</span>
+            <span id="bot-state-tag">待命</span>
+          </div>
+          <div id="llm-reply" class="live-card-text">接通后直接对我说话，支持随时插话打断，或说「放首深海的歌」。</div>
+        </div>
+      </section>
+
+      <!-- 历史对话时间轴 -->
+      <section class="chat-stream-box" id="chat-stream">
+        <div class="chat-empty" id="chat-empty">💬 对话记录将实时显示在这里</div>
+      </section>
+
+      <!-- 底部通话与快捷指令控制坞 -->
+      <footer class="call-dock">
+        <div class="dock-main-actions">
+          <button id="start-call" type="button" class="btn-start">📞 开始通话</button>
+          <button id="end-call" type="button" class="btn-end" disabled>⏹ 结束通话</button>
+          <button id="interrupt-call" type="button" class="btn-interrupt" disabled>🤚 打断回复</button>
+        </div>
+        <div class="quick-music-chips">
+          <button type="button" class="chip-btn" data-quick-track="morning_breeze">🌅 晨光微风</button>
+          <button type="button" class="chip-btn" data-quick-track="deep_sea">🌊 深海冥想</button>
+          <button type="button" class="chip-btn" data-quick-track="cyber_pulse">⚡ 赛博律动</button>
+        </div>
+      </footer>
+    </main>
+
+    <!-- 右侧：音乐唱机 + 超自然音色画廊 + 提示词调优 -->
+    <aside class="studio-column">
+      <!-- 1. 黑胶音乐唱机 -->
+      <section class="glass-panel studio-card">
+        <div class="card-header">
+          <span class="card-title">🎵 双模背景音乐唱机</span>
+          <span class="card-badge" id="ducking-badge" data-ducking="false">💬 对话模式</span>
+        </div>
+        <div class="vinyl-deck">
+          <div class="vinyl-disc" id="vinyl-disc" data-playing="false"></div>
+          <div class="track-meta">
+            <div id="track-title" class="track-title">尚未播放曲目</div>
+            <div id="track-artist" class="track-artist">对我说「播放一首轻音乐」或点击下方按钮</div>
+          </div>
+        </div>
+        <div class="music-controls-row">
+          <button id="music-play" type="button">▶ 播放</button>
+          <button id="music-pause" type="button">⏸ 暂停</button>
+          <button id="music-next" type="button">⏭ 下一首</button>
+        </div>
+        <div class="form-grid">
+          <label class="field full">
+            <span class="field-label">
+              <span>音乐输出模式</span>
+              <span id="music-mode-note" style="font-size:11px;color:var(--accent-cyan);">独立音轨 · 播放时关拾音</span>
+            </span>
+            <select id="music-mode">
+              <option value="client_url">client_url（客户端独立高音质音轨 + 说话闪避 20%）</option>
+              <option value="server_mix">server_mix（服务端 16kHz PCM 采样级混音推流）</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <!-- 2. 腾讯云超自然大模型音色画廊 -->
+      <section class="glass-panel studio-card">
+        <div class="card-header">
+          <span class="card-title">🎙️ 腾讯云超自然大模型音色</span>
+          <span class="card-badge">点击即切 · 下一句生效</span>
+        </div>
+
+        <div class="voice-chips-grid" id="voice-gallery"></div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span class="field-label">当前预置音色 ID</span>
+            <select id="voice-type">
+              <option value="602003">602003 · 默认音色</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">语速 (-2 ~ 2)</span>
+            <input id="speed-input" type="number" min="-2" max="2" step="0.1" value="0">
+          </label>
+          <label class="field full">
+            <span class="field-label">
+              <span>VAD 静音判停阈值（越小响应越快）</span>
+              <span id="vad-stop-value">0.2s</span>
+            </span>
+            <input id="vad-stop" type="range" min="0.2" max="1.5" step="0.05" value="0.2">
+          </label>
+        </div>
+      </section>
+
+      <!-- 3. 角色提示词定义 -->
+      <section class="glass-panel studio-card">
+        <div class="card-header">
+          <span class="card-title">🧠 角色提示词 (System Prompt)</span>
+          <span class="card-badge">实时热更新</span>
+        </div>
+        <label class="field full">
+          <textarea id="system-prompt">你是一个专业热情的智能语音助手，可以陪聊和播放音乐。回答使用自然口语，每次不超过两句话。用户要求放歌、暂停、切歌或调节音量时，调用音乐工具。</textarea>
+        </label>
+        <div class="preset-prompts">
+          <button type="button" data-prompt="你是一个温柔治愈的深夜电台主播，声音充满关怀，每次用一两句简短温暖的话回应用户，遇到点歌请求立即调用音乐工具。">🌙 治愈电台主播</button>
+          <button type="button" data-prompt="你是一个幽默风趣的跨境电商金牌导购，说话干脆利落，每次不超过两句话。">🛍️ 金牌导购</button>
+          <button type="button" data-prompt="You are a friendly native English speaking partner. Keep every reply natural, spoken, and under two sentences.">🌍 英语口语外教</button>
+        </div>
+      </section>
+
+      <!-- 4. 一句话声音复刻 -->
+      <section class="glass-panel studio-card">
+        <details class="clone-drawer">
+          <summary>
+            <span>🧬 声音复刻 (FastVoiceType / 上传 WAV)</span>
+            <span style="font-size:12px;">展开 ▾</span>
+          </summary>
+          <div class="form-grid">
+            <label class="field full">
+              <span class="field-label">自定义复刻 FastVoiceType（留空则使用上方超自然音色）</span>
+              <input id="fast-voice-type" type="text" placeholder="填入腾讯云复刻资源 ID，或下方上传 WAV 生成">
+            </label>
+            <label class="field">
+              <span class="field-label">复刻音色名称</span>
+              <input id="clone-name" type="text" value="专属定制音色">
+            </label>
+            <label class="field">
+              <span class="field-label">16kHz WAV 样本</span>
+              <input id="clone-audio" type="file" accept=".wav,audio/wav">
+            </label>
+            <label class="field full">
+              <span class="field-label">录音对照文本</span>
+              <input id="clone-text" type="text" placeholder="请输入录音里朗读的完整文字">
+            </label>
+            <div class="field full">
+              <button id="clone-submit" type="button" style="width:100%;justify-content:center;">上传并生成复刻音色</button>
+              <p id="clone-result" class="hint-note"></p>
+            </div>
+          </div>
+        </details>
+      </section>
+    </aside>
+  </div>
+  <script src="/static/app.js" defer></script>
 </body>
 </html>

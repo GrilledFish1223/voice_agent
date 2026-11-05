@@ -2,7 +2,7 @@
   <view class="stage {{inCall ? 'is-live' : ''}} {{speaking ? 'is-' + speaking : ''}}">
     <view class="orb"></view>
     <text class="status">{{callState}}</text>
-    <text class="route">{{muted ? '麦克风已静音' : '麦克风开着'}} · {{speakerOn ? '免提' : '听筒'}}</text>
+    <text class="route">{{sessionMode === 'music' ? '音乐模式 · 已暂停拾音' : (muted ? '麦克风已静音' : '对话模式 · 麦克风开着')}} · {{speakerOn ? '免提' : '听筒'}}</text>
   </view>
 
   <view class="captions">

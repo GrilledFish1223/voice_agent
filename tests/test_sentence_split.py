@@ -1,11 +1,19 @@
-from voice_agent.processors.sentence_split import SentenceBuffer
+import pytest
+
+from voice_agent.processors.sentence_split import FirstClauseAggregator, SentenceBuffer
 
 
-def test_first_sentence_waits_until_four_characters():
+def test_first_sentence_cuts_short_ack():
+    # 口语首句经常是「好的，」，不能再等满 4 个字才送 TTS
     buf = SentenceBuffer()
-    assert buf.push("你好，") == []
-    assert buf.push("世界。") == ["你好，世界。"]
+    assert buf.push("好的，") == ["好的，"]
     assert buf.first_sent is True
+
+
+def test_first_sentence_ignores_lone_punctuation():
+    buf = SentenceBuffer()
+    assert buf.push("，") == []
+    assert buf.push("好的。") == ["，好的。"]
 
 
 def test_first_sentence_cuts_on_comma_after_four_characters():
@@ -57,3 +65,13 @@ def test_flush_does_not_reset_first_sent():
     assert buf.flush() == ["还有一点"]
     assert buf.first_sent is True
     assert buf.push("我们先去，再到那边。") == ["我们先去，再到那边。"]
+
+
+@pytest.mark.asyncio
+async def test_first_clause_aggregator_cuts_ack_then_sentence():
+    aggregator = FirstClauseAggregator()
+    first = [item async for item in aggregator.aggregate("好的，我来帮你。")]
+    assert [item.text for item in first] == ["好的，"]
+    remaining = await aggregator.flush()
+    assert remaining is not None
+    assert remaining.text == "我来帮你。"

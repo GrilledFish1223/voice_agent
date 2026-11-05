@@ -1,37 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 
-import websockets
-from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
-    Frame,
-    InterruptionFrame,
-    LLMFullResponseEndFrame,
-    LLMTextFrame,
-    StartFrame,
-    TTSStartedFrame,
-    TTSStoppedFrame,
-)
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from loguru import logger
+from pipecat.frames.frames import ErrorFrame, Frame, InterruptionFrame, TTSAudioRawFrame
+from pipecat.processors.frame_processor import FrameDirection
+from pipecat.services.settings import TTSSettings
+from pipecat.services.tts_service import InterruptibleTTSService, TextAggregationMode
+from pipecat.transcriptions.language import Language
 
-try:
-    from pipecat.frames.frames import TTSAudioRawFrame
-except ImportError:  # 旧版本只有输出音频帧
-    from pipecat.frames.frames import OutputAudioRawFrame as TTSAudioRawFrame
-
-try:
-    from pipecat.frames.frames import StartInterruptionFrame
-except ImportError:  # Pipecat 1.x 只保留 InterruptionFrame
-    StartInterruptionFrame = None  # type: ignore[misc,assignment]
-
-from voice_agent.processors.sentence_split import SentenceBuffer
+from voice_agent.processors.sentence_split import FirstClauseAggregator
+from voice_agent.processors.socket_errors import is_abrupt_close
 from voice_agent.processors.tencent_auth import build_tts_ws_url
 from voice_agent.processors.ws_serializer import client_message
 
@@ -50,24 +33,17 @@ def _code_ok(code: object) -> bool:
     return code is None or code == 0 or str(code) == "0"
 
 
-def _is_real_cancel() -> bool:
-    task = asyncio.current_task()
-    return task is not None and task.cancelling() > 0
+def _ws_open(ws) -> bool:
+    if ws is None:
+        return False
+    state = getattr(ws, "state", None)
+    if state is not None:
+        return str(state) == "OPEN" or getattr(state, "name", "") == "OPEN"
+    return not bool(getattr(ws, "closed", False))
 
 
-def _is_interruption(frame: Frame) -> bool:
-    kinds: tuple[type, ...] = (InterruptionFrame,)
-    if isinstance(StartInterruptionFrame, type):
-        kinds = (InterruptionFrame, StartInterruptionFrame)
-    return isinstance(frame, kinds)
-
-
-async def _default_connect(url: str) -> object:
-    return await websockets.connect(url)
-
-
-class TencentTTSService(FrameProcessor):
-    """腾讯云流式合成。首句立即送出，打断时丢掉未播放的文本和音频。"""
+class TencentTTSService(InterruptibleTTSService):
+    """Pipecat InterruptibleTTSService：腾讯云 stream_wsv2 WebSocket。"""
 
     def __init__(
         self,
@@ -81,7 +57,22 @@ class TencentTTSService(FrameProcessor):
         volume: float = 0,
         **kwargs,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(
+            push_stop_frames=True,
+            push_start_frame=True,
+            text_aggregation_mode=TextAggregationMode.SENTENCE,
+            pause_frame_processing=True,
+            sample_rate=SAMPLE_RATE,
+            # 音频从 receive 循环进 context，不能按“context 任务里没音频”把服务打成不可用
+            max_consecutive_zero_audio_contexts=0,
+            settings=TTSSettings(
+                model="tencent-tts",
+                voice=str(voice_type),
+                language=Language.ZH,
+            ),
+            **kwargs,
+        )
+        self._text_aggregator = FirstClauseAggregator(language="zh")
         self._app_id = str(app_id)
         self._secret_id = secret_id
         self._secret_key = secret_key
@@ -89,288 +80,201 @@ class TencentTTSService(FrameProcessor):
         self.fast_voice_type = fast_voice_type or ""
         self.speed = speed
         self.volume = volume
-        self._connect = connect or _default_connect
-        self._sentences = SentenceBuffer()
-        self._ws = None
-        self._reader: asyncio.Task | None = None
-        self._ready = asyncio.Event()
+        self._connect_fn = connect
         self.session_id: str | None = None
+        self._receive_task = None
         self._live_voice: tuple[object, str] | None = None
-        self._accept_audio = False
-        self._turn_token = 0
-        self._speech_started = False
-        self._closing = False
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
-        # StartFrame 会让基类创建处理任务。Pipeline 先注入 TaskManager；单独调用时跳过，避免抛出事件循环。
-        if self._task_manager is not None:
-            await super().process_frame(frame, direction)
-        if direction != FrameDirection.DOWNSTREAM:
-            await self.push_frame(frame, direction)
-            return
-        if isinstance(frame, StartFrame):
-            await self.connect_session()
-        elif isinstance(frame, LLMTextFrame):
-            await self.submit_text(frame.text)
-        elif isinstance(frame, LLMFullResponseEndFrame):
-            await self._flush_tail()
-            await self._mark_speech_stopped()
-        elif isinstance(frame, EndFrame):
-            await self._flush_tail()
-            await self._mark_speech_stopped()
-            await self._close_socket()
-        elif isinstance(frame, CancelFrame):
-            await self.interrupt()
-            await self._close_socket()
-        elif _is_interruption(frame):
-            await self.interrupt()
-        await self.push_frame(frame, direction)
+        self._provider_error_sent = False
 
     def _voice_key(self) -> tuple[object, str]:
         return (self.voice_type, self.fast_voice_type or "")
 
-    async def connect_session(self) -> None:
-        if self._ws is not None and self._live_voice == self._voice_key():
-            return
-        if self._ws is not None:
-            await self._close_socket()
-        self.session_id = str(uuid.uuid4())
-        self._ready.clear()
-        self._accept_audio = False
-        now = int(time.time())
-        try:
-            url = build_tts_ws_url(
-                app_id=self._app_id,
-                secret_id=self._secret_id,
-                secret_key=self._secret_key,
-                session_id=self.session_id,
-                voice_type=int(self.voice_type),
-                fast_voice_type=self.fast_voice_type or "",
-                speed=_query_number(self.speed),
-                volume=_query_number(self.volume),
-                timestamp=now,
-                expired=now + 24 * 60 * 60,
-            )
-            self._ws = await self._connect(url)
-        except asyncio.CancelledError:
-            if _is_real_cancel():
-                raise
-            return
-        except Exception as exc:
-            self._ws = None
-            self._live_voice = None
-            await self._emit_error(exc)
-            return
-        self._live_voice = self._voice_key()
-        self._reader = asyncio.create_task(self._read_loop(self._ws))
+    async def setup(self, setup) -> None:
+        await super().setup(setup)
+        await self._connect()
 
-    async def submit_text(self, text: str) -> None:
-        token = self._turn_token
-        ready = self._sentences.push(text or "")
-        if ready:
-            if not await self._synthesize(ready[0], token):
-                return
-            for sentence in ready[1:]:
-                if not await self._synthesize(sentence, token):
-                    return
-        if token != self._turn_token:
-            return
-        for sentence in self._sentences.push(""):
-            if not await self._synthesize(sentence, token):
-                return
+    async def _connect(self) -> None:
+        await super()._connect()
+        await self._connect_websocket()
+        if self._websocket and self._receive_task is None:
+            self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
 
-    async def interrupt(self) -> None:
-        self._turn_token += 1
-        self._sentences.reset()
-        self._accept_audio = False
-        await self._mark_speech_stopped()
-        ws = self._ws
-        if ws is not None and self.session_id:
-            payload = {
-                "session_id": self.session_id,
-                "message_id": str(uuid.uuid4()),
-                "action": "ACTION_RESET",
-            }
+    async def _disconnect(self) -> None:
+        await super()._disconnect()
+        if self._receive_task is not None:
+            await self.cancel_task(self._receive_task)
+            self._receive_task = None
+        await self._disconnect_websocket()
+
+    async def _connect_websocket(self) -> None:
+        if _ws_open(self._websocket) and self._live_voice == self._voice_key() and self.session_id:
+            return
+        old = self._websocket
+        self._websocket = None
+        self.session_id = None
+        self._live_voice = None
+        if old is not None:
             try:
-                await ws.send(json.dumps(payload))
-            except asyncio.CancelledError:
-                if _is_real_cancel():
-                    raise
-            except Exception as exc:
-                await self._emit_error(exc)
-        await self._close_socket()
+                await old.close()
+            except Exception:
+                pass
+        self.session_id = str(uuid.uuid4())
+        now = int(time.time())
+        url = build_tts_ws_url(
+            app_id=self._app_id,
+            secret_id=self._secret_id,
+            secret_key=self._secret_key,
+            session_id=self.session_id,
+            voice_type=int(self.voice_type),
+            fast_voice_type=self.fast_voice_type or "",
+            speed=_query_number(self.speed),
+            volume=_query_number(self.volume),
+            timestamp=now,
+            expired=now + 24 * 60 * 60,
+        )
+        try:
+            if self._connect_fn is not None:
+                self._websocket = await self._connect_fn(url)
+            else:
+                self._websocket = await self._websocket_connect(url, open_timeout=20)
+            self._live_voice = self._voice_key()
+            await self.set_usable(True)
+            await self._call_event_handler("on_connected")
+            logger.info("TencentTTS websocket connected")
+        except Exception as exc:
+            self._websocket = None
+            self._live_voice = None
+            await self._emit_client_error(exc)
+            await self._call_event_handler("on_connection_error", str(exc))
 
-    async def _flush_tail(self) -> None:
-        token = self._turn_token
-        for sentence in self._sentences.flush():
-            if not await self._synthesize(sentence, token):
-                return
+    async def _disconnect_websocket(self) -> None:
+        ws = self._websocket
+        self._websocket = None
+        self._live_voice = None
+        self.session_id = None
+        if ws is None:
+            return
+        try:
+            await ws.close()
+        except Exception as exc:
+            if not is_abrupt_close(exc):
+                logger.warning(f"TencentTTS close: {exc}")
+        await self._call_event_handler("on_disconnected")
 
-    async def _synthesize(self, sentence: str, token: int) -> bool:
-        if token != self._turn_token or not sentence:
-            return False
-        if not await self._ensure_connected():
-            return False
-        if token != self._turn_token or self._ws is None:
-            return False
-        if not await self._wait_ready():
-            return False
-        if token != self._turn_token or self._ws is None or not self.session_id:
-            return False
-        ws = self._ws
+    async def _send_action(self, action: str, data: str = "") -> None:
+        if not _ws_open(self._websocket) or not self.session_id:
+            return
         payload = {
             "session_id": self.session_id,
             "message_id": str(uuid.uuid4()),
-            "action": "ACTION_SYNTHESIS",
-            "data": sentence,
+            "action": action,
         }
+        if data or action == "ACTION_COMPLETE":
+            payload["data"] = data
+        await self._websocket.send(json.dumps(payload))
+
+    async def _handle_interruption(self, frame: InterruptionFrame, direction: FrameDirection) -> None:
         try:
-            await ws.send(json.dumps(payload))
-        except asyncio.CancelledError:
-            if _is_real_cancel():
-                raise
-            return False
-        except Exception as exc:
-            await self._emit_error(exc)
-            return False
-        # 发送之后再让读循环把已经进队的旧音频丢掉，然后才开始播放。
-        await asyncio.sleep(0)
-        if token != self._turn_token or self._ws is not ws:
-            return False
-        self._accept_audio = True
-        return True
-
-    async def _ensure_connected(self) -> bool:
-        if self._ws is not None and self._live_voice != self._voice_key():
-            await self._close_socket()
-        if self._ws is None:
-            await self.connect_session()
-        return self._ws is not None
-
-    async def _wait_ready(self) -> bool:
-        if self._ready.is_set():
-            return self._ws is not None
-        reader = self._reader
-        if reader is None:
-            return False
-        waiter = asyncio.create_task(self._ready.wait())
-        try:
-            done, _pending = await asyncio.wait(
-                {waiter, reader},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        except asyncio.CancelledError:
-            waiter.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await waiter
-            if _is_real_cancel():
-                raise
-            return False
-        if waiter not in done:
-            waiter.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await waiter
-        return self._ready.is_set() and self._ws is not None
-
-    async def _read_loop(self, ws) -> None:
-        try:
-            while True:
-                message = await ws.recv()
-                try:
-                    await self._on_server_message(message)
-                except Exception as exc:
-                    await self._emit_error(exc)
-        except asyncio.CancelledError:
-            if _is_real_cancel():
-                raise
-        except Exception as exc:
-            if self._ws is ws:
-                self._ws = None
-                self._ready.clear()
-                self._live_voice = None
-            if not self._closing:
-                await self._emit_error(exc)
-
-    async def _on_server_message(self, message: object) -> None:
-        if isinstance(message, (bytes, bytearray)):
-            if not self._accept_audio:
-                return
-            await self._mark_speech_started()
-            if not self._accept_audio:
-                return
-            await self.push_frame(
-                TTSAudioRawFrame(audio=bytes(message), sample_rate=SAMPLE_RATE, num_channels=1),
-                FrameDirection.DOWNSTREAM,
-            )
-            return
-        if not isinstance(message, str):
-            return
-        try:
-            payload = json.loads(message)
-        except json.JSONDecodeError as exc:
-            await self._emit_error(exc)
-            return
-        if not isinstance(payload, dict):
-            return
-        if not _code_ok(payload.get("code", 0)):
-            await self._emit_error(str(payload.get("message") or f"tts error {payload.get('code')}"))
-            return
-        if payload.get("ready") == 1:
-            self._ready.set()
-        # final == 1 只表示这一轮合成结束，对话继续，但说话状态要收掉。
-        final = payload.get("final")
-        if final == 1 or final == "1":
-            await self._mark_speech_stopped()
-        if payload.get("heartbeat") == 1:
-            return
-
-    async def _close_socket(self) -> None:
-        self._accept_audio = False
-        await self._mark_speech_stopped()
-        ws = self._ws
-        reader = self._reader
-        self._ws = None
-        self._reader = None
-        self._ready.clear()
-        self._live_voice = None
-        self._closing = True
-        try:
-            if reader is not None and reader is not asyncio.current_task():
-                if not reader.done():
-                    reader.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await reader
-            if ws is not None:
-                try:
-                    await ws.close()
-                except Exception as exc:
-                    await self._emit_error(exc)
-        finally:
-            self._closing = False
-
-    async def _mark_speech_started(self) -> None:
-        if self._speech_started:
-            return
-        self._speech_started = True
-        await self.push_frame(TTSStartedFrame(), FrameDirection.DOWNSTREAM)
-
-    async def _mark_speech_stopped(self) -> None:
-        if not self._speech_started:
-            return
-        self._speech_started = False
-        await self.push_frame(TTSStoppedFrame(), FrameDirection.DOWNSTREAM)
-
-    async def _emit_error(self, error: object) -> None:
-        message = error if isinstance(error, str) else str(error)
-        if not message:
-            message = "腾讯云合成连接失败"
-        try:
-            await self.push_frame(
-                client_message({"type": "error", "message": message}),
-                FrameDirection.DOWNSTREAM,
-            )
-        except asyncio.CancelledError:
-            if _is_real_cancel():
-                raise
+            await self._send_action("ACTION_RESET")
         except Exception:
+            pass
+        await super()._handle_interruption(frame, direction)
+
+    async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:
+        text = (text or "").strip()
+        if not text:
+            yield None
             return
+        # 不要在合成路径上调 _disconnect()：receive 循环里会把 _disconnecting 置位，随后自动重连被跳过
+        await self._ensure_session()
+        if not _ws_open(self._websocket) or not self.session_id:
+            yield ErrorFrame(error="腾讯云合成连接失败")
+            return
+        logger.debug(f"TencentTTS synthesis: {text}")
+        await self.start_ttfb_metrics()
+        try:
+            await self._send_action("ACTION_SYNTHESIS", text)
+        except Exception as exc:
+            await self._emit_client_error(exc)
+            yield ErrorFrame(error=str(exc))
+            return
+        yield None
+
+    async def flush_audio(self, context_id: str | None = None) -> None:
+        try:
+            await self._send_action("ACTION_COMPLETE")
+        except Exception as exc:
+            logger.warning(f"TencentTTS ACTION_COMPLETE failed: {exc}")
+
+    async def _receive_messages(self) -> None:
+        ws = self._websocket
+        if ws is None:
+            return
+        async for message in ws:
+            if isinstance(message, (bytes, bytearray)):
+                await self.stop_ttfb_metrics()
+                self._consecutive_zero_audio_contexts = 0
+                context_id = self.get_active_audio_context_id()
+                frame = TTSAudioRawFrame(
+                    audio=bytes(message),
+                    sample_rate=SAMPLE_RATE,
+                    num_channels=1,
+                )
+                frame.context_id = context_id
+                # 官方 WebSocket TTS 都把音频记进 audio context，否则 context 会被当成空的
+                if context_id:
+                    await self.append_to_audio_context(context_id, frame)
+                else:
+                    await self.push_frame(frame)
+                continue
+            if not isinstance(message, str):
+                continue
+            try:
+                payload = json.loads(message)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if not _code_ok(payload.get("code", 0)):
+                self._provider_error_sent = True
+                await self._emit_client_error(
+                    str(payload.get("message") or f"tts error {payload.get('code')}")
+                )
+                continue
+            if payload.get("final") == 1 or payload.get("final") == "1":
+                # stream_wsv2 一轮会话用完就必须换新 session。关掉当前连接，
+                # receive 循环会自动重连；不要走 _disconnect()，否则 _disconnecting 会拦住重连。
+                logger.debug("TencentTTS session final, closing for reconnect")
+                self.session_id = None
+                self._live_voice = None
+                ws = self._websocket
+                if ws is not None:
+                    try:
+                        await ws.close()
+                    except Exception:
+                        pass
+                return
+
+    async def _ensure_session(self) -> None:
+        if _ws_open(self._websocket) and self.session_id and self._live_voice == self._voice_key():
+            return
+        if getattr(self, "_reconnect_in_progress", False):
+            for _ in range(25):
+                await asyncio.sleep(0.02)
+                if _ws_open(self._websocket) and self.session_id:
+                    return
+        await self._connect_websocket()
+        if self._websocket and (self._receive_task is None or self._receive_task.done()):
+            self._receive_task = self.create_task(self._receive_task_handler(self._report_error))
+
+    async def _emit_client_error(self, error: object) -> None:
+        if is_abrupt_close(error):
+            if self._provider_error_sent:
+                return
+            self._provider_error_sent = True
+            message = "腾讯云合成连接被中断，请检查 SecretId 是否有效"
+        else:
+            message = error if isinstance(error, str) else str(error)
+            if not message:
+                message = "腾讯云合成连接失败"
+        await self.push_frame(client_message({"type": "error", "message": message}))

@@ -1,4 +1,5 @@
 const TARGET_RATE = 16000;
+const CAPTURE_FRAME_SAMPLES = 640; // 40ms @ 16kHz (1280 bytes), 避免每 2.6ms 触发一次消息风暴
 
 function clampToInt16(sample) {
   const clamped = Math.max(-1, Math.min(1, sample));
@@ -14,6 +15,8 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.cursor = 0;
+    this.chunkBuffer = new Int16Array(CAPTURE_FRAME_SAMPLES);
+    this.chunkOffset = 0;
   }
 
   process(inputs) {
@@ -22,21 +25,22 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       return true;
     }
     const step = sampleRate / TARGET_RATE;
-    const samples = [];
     let cursor = this.cursor;
     while (cursor < channel.length) {
       const index = Math.floor(cursor);
       const fraction = cursor - index;
       const next = Math.min(index + 1, channel.length - 1);
       const mixed = channel[index] + (channel[next] - channel[index]) * fraction;
-      samples.push(clampToInt16(mixed));
+      this.chunkBuffer[this.chunkOffset] = clampToInt16(mixed);
+      this.chunkOffset += 1;
+      if (this.chunkOffset >= CAPTURE_FRAME_SAMPLES) {
+        const out = this.chunkBuffer.slice(0, CAPTURE_FRAME_SAMPLES);
+        this.port.postMessage(out.buffer, [out.buffer]);
+        this.chunkOffset = 0;
+      }
       cursor += step;
     }
     this.cursor = cursor - channel.length;
-    if (samples.length > 0) {
-      const pcm = new Int16Array(samples);
-      this.port.postMessage(pcm.buffer, [pcm.buffer]);
-    }
     return true;
   }
 }
@@ -44,7 +48,8 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 class PcmPlaybackProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.capacity = TARGET_RATE * 8;
+    // 45 秒环形缓冲区，防止长回复溢出覆盖未播放音频导致卡顿
+    this.capacity = TARGET_RATE * 45;
     this.buffer = new Int16Array(this.capacity);
     this.readPointer = 0;
     this.writePointer = 0;

@@ -14,6 +14,7 @@ from voice_agent.services.music_library import MusicLibrary, MusicTrack
 from voice_agent.services.voice_catalog import clone_voice, list_voices
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
+_ROOT_ENV = _PACKAGE_DIR.parent / ".env"
 _STATIC_DIR = _PACKAGE_DIR / "static"
 _INDEX_FILE = _STATIC_DIR / "index.html"
 _MUSIC_DIR = _PACKAGE_DIR / "var" / "music"
@@ -147,6 +148,15 @@ def _websocket_transport(task):
     return None
 
 
+def _load_root_env() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(_ROOT_ENV, override=False)
+
+
+_load_root_env()
 app = create_app()
 
 

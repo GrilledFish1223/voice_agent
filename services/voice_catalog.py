@@ -22,12 +22,19 @@ _SIGNED_HEADERS = "content-type;host;x-tc-action"
 _ALGORITHM = "TC3-HMAC-SHA256"
 
 PRESET_VOICES: tuple[dict[str, object], ...] = (
-    {"voice_type": 101001, "name": "智瑜", "scene": "女声情感"},
-    {"voice_type": 101004, "name": "智云", "scene": "男声通用"},
-    {"voice_type": 101015, "name": "智萌", "scene": "女声可爱"},
-    {"voice_type": 301031, "name": "爱小树", "scene": "超自然女声"},
-    {"voice_type": 301032, "name": "爱小荷", "scene": "超自然男声"},
-    {"voice_type": 501004, "name": "智小柔", "scene": "客服"},
+    {"voice_type": 602003, "name": "默认音色", "scene": "超自然大模型音色"},
+    {"voice_type": 502007, "name": "智小虎", "scene": "聊天童声"},
+    {"voice_type": 502006, "name": "智小悟", "scene": "聊天男声"},
+    {"voice_type": 502005, "name": "智小解", "scene": "解说男声"},
+    {"voice_type": 502004, "name": "智小满", "scene": "营销女声"},
+    {"voice_type": 502003, "name": "智小敏", "scene": "聊天女声"},
+    {"voice_type": 502001, "name": "智小柔", "scene": "聊天女声"},
+    {"voice_type": 602004, "name": "暖心阿灿", "scene": "聊天男声"},
+    {"voice_type": 602005, "name": "专业梓欣", "scene": "聊天女声"},
+    {"voice_type": 603000, "name": "懂事少年", "scene": "特色男声"},
+    {"voice_type": 603001, "name": "潇湘妹妹", "scene": "特色女声"},
+    {"voice_type": 603002, "name": "软萌心心", "scene": "特色男童声"},
+    {"voice_type": 603003, "name": "随和老李", "scene": "聊天男声"},
 )
 
 

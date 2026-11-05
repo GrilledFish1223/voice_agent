@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pipecat.frames import frames as pipecat_frames
-from pipecat.frames.frames import Frame, InterruptionFrame
+from pipecat.frames.frames import Frame, InterruptionFrame, MetricsFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from voice_agent.processors.ws_serializer import ClientEventFrame, client_message
@@ -22,17 +22,48 @@ def _matches(frame: Frame, *names: str) -> bool:
     return False
 
 
+def metrics_payload(frame: Frame) -> dict | None:
+    """把 Pipecat MetricsFrame 收成页面能画的延迟事件。"""
+    if not isinstance(frame, MetricsFrame):
+        return None
+    items = []
+    for data in getattr(frame, "data", None) or []:
+        kind = type(data).__name__.replace("MetricsData", "")
+        processor = str(getattr(data, "processor", "") or "").split("#", 1)[0]
+        item = {"kind": kind, "processor": processor}
+        value = getattr(data, "value", None)
+        if isinstance(value, (int, float)):
+            item["value"] = round(float(value), 3)
+        for key in ("ttfb", "ttfa", "ttfat", "thinking_time", "leading_silence"):
+            number = getattr(data, key, None)
+            if isinstance(number, (int, float)):
+                item[key] = round(float(number), 3)
+        items.append(item)
+    if not items:
+        return None
+    return {"type": "metrics", "items": items}
+
+
+def latency_payload(seconds: float, parts: list[dict] | None = None) -> dict:
+    """用户停说到机器人开说的端到端延迟。"""
+    payload = {"type": "metrics", "user_to_bot_secs": round(float(seconds), 3)}
+    if parts:
+        payload["parts"] = parts
+    return payload
+
+
 def caption_payload(frame: Frame) -> dict | None:
-    """把经过管道的一帧收成客户端字幕事件。缺类名时直接跳过。"""
+    """对齐官网网页示例：interim 只覆盖当前句，TranscriptionFrame 才落一条用户字幕。"""
+    metrics = metrics_payload(frame)
+    if metrics is not None:
+        return metrics
     text = getattr(frame, "text", "") or ""
     if _matches(frame, "InterimTranscriptionFrame"):
-        return {"type": "asr_interim", "text": text}
+        return {"type": "user_transcript", "text": text, "final": False}
     if _matches(frame, "TranscriptionFrame"):
-        return {"type": "asr_final", "text": text}
+        return {"type": "user_transcript", "text": text, "final": True}
     if _matches(frame, "LLMTextFrame"):
-        return {"type": "llm_delta", "text": text}
-    if _matches(frame, "LLMFullResponseEndFrame"):
-        return {"type": "llm_done"}
+        return {"type": "bot_output", "text": text, "final": False}
     if _matches(frame, "UserStartedSpeakingFrame", "VADUserStartedSpeakingFrame"):
         return {"type": "user_speaking", "active": True}
     if _matches(frame, "UserStoppedSpeakingFrame", "VADUserStoppedSpeakingFrame"):
@@ -79,3 +110,8 @@ class CaptionTap(FrameProcessor):
         await self.push_frame(frame, direction)
         if payload is not None:
             await self.push_frame(client_message(payload), direction)
+
+    async def publish(self, payload: dict) -> None:
+        """轮次字幕、端到端延迟这类不挂在某一帧上的事件，直接推给客户端。"""
+        if payload:
+            await self.push_frame(client_message(payload))

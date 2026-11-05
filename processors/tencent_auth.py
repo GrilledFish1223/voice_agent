@@ -34,6 +34,10 @@ def build_asr_ws_url(
     expired: int,
     nonce: int,
     engine_model_type: str = "16k_zh",
+    vad_silence_time: int | None = None,
+    filter_modal: int | None = None,
+    filter_punc: int | None = None,
+    convert_num_mode: int | None = None,
 ) -> str:
     params: dict[str, object] = {
         "engine_model_type": engine_model_type,
@@ -45,6 +49,14 @@ def build_asr_ws_url(
         "voice_format": 1,
         "voice_id": voice_id,
     }
+    if vad_silence_time is not None:
+        params["vad_silence_time"] = int(vad_silence_time)
+    if filter_modal is not None:
+        params["filter_modal"] = int(filter_modal)
+    if filter_punc is not None:
+        params["filter_punc"] = int(filter_punc)
+    if convert_num_mode is not None:
+        params["convert_num_mode"] = int(convert_num_mode)
     plaintext = f"asr.cloud.tencent.com/asr/v2/{app_id}?{_canonical_query(params)}"
     query = _signed_query(plaintext, secret_key, params, "signature")
     return f"wss://asr.cloud.tencent.com/asr/v2/{app_id}?{query}"

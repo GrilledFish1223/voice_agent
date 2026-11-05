@@ -12,5 +12,9 @@ def test_miniprogram_uses_shared_websocket_protocol():
     assert "sampleRate: 16000" in page
     assert "clear_audio" in page
     assert "music_control" in page
+    hangup = page[page.index("endCall(updateStatus)") :]
+    assert "this.releaseMusicAudio();" in hangup
+    assert 'this.data.sessionMode === "music"' in page
+    assert 'type === "session_mode"' in page
     assert "createWebAudioContext" in player
     assert "nextStartTime" in player

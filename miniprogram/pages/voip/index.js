@@ -9,12 +9,19 @@ const DEFAULT_PROMPT =
   "你是一个专业热情的智能语音助手，可以陪聊和播放音乐。回答使用口语，每次不超过两句话。用户要求放歌、暂停、切歌或调节音量时，调用音乐工具。";
 
 const VOICES = [
-  { voice_type: 101001, name: "智瑜", scene: "女声情感" },
-  { voice_type: 101004, name: "智云", scene: "男声通用" },
-  { voice_type: 101015, name: "智萌", scene: "女声可爱" },
-  { voice_type: 301031, name: "爱小树", scene: "超自然女声" },
-  { voice_type: 301032, name: "爱小荷", scene: "超自然男声" },
-  { voice_type: 501004, name: "智小柔", scene: "客服" },
+  { voice_type: 602003, name: "默认音色", scene: "超自然大模型音色" },
+  { voice_type: 502007, name: "智小虎", scene: "聊天童声" },
+  { voice_type: 502006, name: "智小悟", scene: "聊天男声" },
+  { voice_type: 502005, name: "智小解", scene: "解说男声" },
+  { voice_type: 502004, name: "智小满", scene: "营销女声" },
+  { voice_type: 502003, name: "智小敏", scene: "聊天女声" },
+  { voice_type: 502001, name: "智小柔", scene: "聊天女声" },
+  { voice_type: 602004, name: "暖心阿灿", scene: "聊天男声" },
+  { voice_type: 602005, name: "专业梓欣", scene: "聊天女声" },
+  { voice_type: 603000, name: "懂事少年", scene: "特色男声" },
+  { voice_type: 603001, name: "潇湘妹妹", scene: "特色女声" },
+  { voice_type: 603002, name: "软萌心心", scene: "特色男童声" },
+  { voice_type: 603003, name: "随和老李", scene: "聊天男声" },
 ];
 
 const SEED_TRACKS = [
@@ -45,7 +52,8 @@ Page({
     musicModeNames: ["客户端独立播放", "服务端混音"],
     musicModeIndex: 0,
     musicMode: "client_url",
-    musicNote: "客户端播放时，音乐会单独出声，说话时音量会降下来。",
+    musicNote: "播放时进入音乐模式并暂停拾音，点暂停回到对话。",
+    sessionMode: "conversation",
     songQuery: "",
     trackTitle: "还没有曲目",
     trackArtist: "",
@@ -87,7 +95,7 @@ Page({
     const recorder = this.recorder;
     recorder.onFrameRecorded((res) => {
       const frameBuffer = res && res.frameBuffer;
-      if (!frameBuffer || !this.socketOpen || this.data.muted || !this.socketTask) {
+      if (!frameBuffer || !this.socketOpen || this.data.muted || !this.socketTask || this.data.sessionMode === "music") {
         return;
       }
       this.socketTask.send({ data: frameBuffer });
@@ -172,11 +180,11 @@ Page({
     return {
       type: "config",
       system_prompt: DEFAULT_PROMPT,
-      voice_type: Number(voice.voice_type || 101001),
+      voice_type: Number(voice.voice_type || 602003),
       fast_voice_type: "",
       speed: 0,
       volume: 0,
-      vad_stop_secs: 0.5,
+      vad_stop_secs: 0.2,
       vad_confidence: 0.7,
       llm_model: "",
       music_mode: musicMode,
@@ -254,8 +262,8 @@ Page({
       musicModeIndex: musicModeIndex,
       musicMode: musicMode,
       musicNote: musicMode === "server_mix"
-        ? "服务端混音时，音乐已经在语音里，不再单独播放。"
-        : "客户端播放时，音乐会单独出声，说话时音量会降下来。",
+        ? "服务端混音 · 播放时关拾音，暂停后回到对话。"
+        : "播放时进入音乐模式并暂停拾音，点暂停回到对话。",
     });
     if (musicMode === "server_mix") {
       this.releaseMusicAudio();
@@ -352,8 +360,10 @@ Page({
       this.callActive = false;
       this.stopRecording();
       this.player.clear();
+      this.releaseMusicAudio();
+      this.currentTrack = null;
       this.resetSpeaking();
-      this.setData({ callState: "已结束", inCall: false });
+      this.setData({ callState: "已结束", inCall: false, sessionMode: "conversation", trackTitle: "还没有曲目" });
     });
   },
 
@@ -375,6 +385,9 @@ Page({
     if (this.player) {
       this.player.clear();
     }
+    this.releaseMusicAudio();
+    this.currentTrack = null;
+    this.setData({ trackTitle: "还没有曲目", sessionMode: "conversation" });
     this.resetSpeaking();
     if (updateStatus !== false && wasLive) {
       this.setData({ callState: "已结束", inCall: false });
@@ -423,6 +436,10 @@ Page({
     if (message.type === "bot_speaking") {
       this.botSpeaking = message.active === true;
       this.syncSpeaking();
+      return;
+    }
+    if (message.type === "session_mode") {
+      this.applySessionMode(message.mode);
       return;
     }
     if (message.type === "music_control") {
@@ -594,7 +611,22 @@ Page({
     });
   },
 
+  applySessionMode(mode) {
+    const next = mode === "music" ? "music" : "conversation";
+    if (this.data.sessionMode === next) {
+      return;
+    }
+    this.setData({ sessionMode: next });
+  },
+
   handleMusicControl(message) {
+    if (message.session_mode) {
+      this.applySessionMode(message.session_mode);
+    } else if (message.action === "pause" || message.action === "stop") {
+      this.applySessionMode("conversation");
+    } else if (message.action === "play" || message.action === "resume" || message.action === "next") {
+      this.applySessionMode("music");
+    }
     this.rememberTrack(message.track);
     this.readRestingVolume(message);
     const action = message.action;
@@ -679,6 +711,7 @@ Page({
       return;
     }
     this.rememberTrack(track);
+    this.applySessionMode("music");
     this.sendJson({ type: "music_cmd", action: "resume" });
     const audio = this.startSeparateTrack(track.url);
     if (!audio) {
@@ -689,6 +722,7 @@ Page({
   },
 
   pauseSong() {
+    this.applySessionMode("conversation");
     this.sendJson({ type: "music_cmd", action: "pause" });
     if (this.data.musicMode !== "server_mix" && this.musicAudio) {
       this.musicAudio.pause();
@@ -708,6 +742,7 @@ Page({
   },
 
   nextSong() {
+    this.applySessionMode("music");
     this.sendJson({ type: "music_cmd", action: "next" });
     if (this.data.musicMode === "server_mix" || !this.socketOpen) {
       const track = this.cycleTrack();

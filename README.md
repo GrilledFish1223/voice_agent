@@ -1,21 +1,23 @@
 # voice-agent
 
-本地实时通话服务。进程启动时由 `load_settings()` 读取 `os.getenv`，`server.py` 不会加载 `.env` 或 `.env.example`。未写入当前进程环境的变量视为空。
+本地实时通话服务。`server.py` 启动时会读取仓库根目录的 `.env`，已存在的环境变量优先。`load_settings()` 再从进程环境取值。`.env.example` 不会被读取。
 
 没有配齐腾讯云和大模型密钥时，ASR / TTS / LLM 不会接通。不要假设通话已经可用。
 
 ## 环境变量
 
-在启动 uvicorn 的同一个 shell 里导出，或写在命令前面：
+写在仓库根目录 `.env`，或在启动 uvicorn 的同一个 shell 里导出：
 
 ```bash
-export TENCENT_APP_ID=你的应用ID
-export TENCENT_SECRET_ID=你的密钥ID
-export TENCENT_SECRET_KEY=你的密钥
+export TENCENT_CLOUD_APP_ID=你的应用ID
+export TENCENT_CLOUD_SECRET_ID=你的密钥ID
+export TENCENT_CLOUD_SECRET_KEY=你的密钥
 export LLM_BASE_URL=https://api.deepseek.com
 export LLM_API_KEY=你的大模型密钥
-export LLM_MODEL=deepseek-chat
+export LLM_MODEL=deepseek-flash
 ```
+
+也接受旧名字 `TENCENT_APP_ID`、`TENCENT_SECRET_ID`、`TENCENT_SECRET_KEY`。同名时以 `TENCENT_CLOUD_*` 为准。
 
 `voice_agent/.env.example` 只列出上述名字和示例值，复制该文件不会自动生效。
 
@@ -44,14 +46,19 @@ Web 和小程序共用同一条 WebSocket：`/ws`。
 - 二进制：16 kHz Int16 PCM
 - 文本：JSON（配置、字幕、打断、音乐控制、错误）
 
-## 音乐模式
+## 会话模式
 
-页面或小程序把 `music_mode` 随 `config` 发给服务。
+Pipecat 管道在 `transport.input()` 后加了 `ConversationMicGate`：
 
-- `client_url`：客户端另开一个音频元素，拉 `/api/music/stream/{id}`。说话时背景音乐音量降到 0.2。
+- **对话模式**：麦克风 PCM 进入 VAD / ASR / LLM / TTS。
+- **音乐模式**：开始播放后暂停拾音，上行 PCM 不再进识别，避免把扬声器里的歌再听成说话。点暂停、停止或挂断后回到对话。
+
+`music_mode` 只决定音乐怎么出声，不决定是否拾音：
+
+- `client_url`：客户端另开一个音频元素，拉 `/api/music/stream/{id}`。
 - `server_mix`：音乐混进同一路下行 PCM。客户端不再打开第二个音频元素。
 
-说「放一首深海的音乐」会点到预置曲目「深海冥想」。
+说「放一首深海的音乐」会点到预置曲目「深海冥想」。停歌请点暂停，音乐模式下麦克风不送识别。
 
 ## 微信小程序
 
@@ -62,6 +69,6 @@ Web 和小程序共用同一条 WebSocket：`/ws`。
 1. 未配密钥时，页面或 `/api/health` 给出中文缺项列表，不是栈追踪。
 2. 配齐密钥后说话，字幕先出识别中文本，再出最终文本和语音。
 3. 助手说话时插话，播放在一次往返内停止。
-4. 说「放一首深海的音乐」，`client_url` 出现曲目卡片，说话时音量下降。
+4. 说「放一首深海的音乐」后进入音乐模式，麦克风不再送识别；点暂停后回到对话。
 5. `server_mix` 不再打开第二个音频元素，下行 PCM 仍连续。
 6. 微信开发者工具连接 `ws://127.0.0.1:8765/ws`，完成同样的说话、打断和点歌。
